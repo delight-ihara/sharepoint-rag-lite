@@ -297,17 +297,72 @@ def upsert_chunks(
         put_conn(conn)
 
 
+# ── DB からの既存ファイル情報取得 ─────────────────────────
+
+def _get_indexed_files() -> dict[str, str]:
+    """DB にインジェスト済みのファイル ID と updated_at を取得"""
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT file_id, updated_at FROM chunks")
+        result = {row[0]: row[1].isoformat() if row[1] else "" for row in cur.fetchall()}
+        cur.close()
+        return result
+    finally:
+        put_conn(conn)
+
+
+def _delete_file_chunks(file_id: str):
+    """ファイルのチャンクを全削除（SP から消えたファイル用）"""
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM chunks WHERE file_id = %s", (file_id,))
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        return deleted
+    finally:
+        put_conn(conn)
+
+
+def _update_acl_only(file_id: str, allowed_groups: list[str]):
+    """ACL だけ更新（ファイル内容は変わっていないが権限が変わった場合）"""
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE chunks SET allowed_groups = %s, updated_at = now() WHERE file_id = %s",
+            (allowed_groups, file_id),
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        put_conn(conn)
+
+
 # ── メインパイプライン ─────────────────────────────────
 
 def run(incremental: bool = False):
-    """インジェストパイプライン実行"""
-    log.info("=== インジェスト開始 ===")
+    """インジェストパイプライン実行
+
+    incremental=False: 全件再処理
+    incremental=True:  差分更新（変更・追加・削除を検知）
+    """
+    log.info("=== インジェスト開始 (incremental=%s) ===", incremental)
     token = get_graph_token()
     files = list_sp_files(token)
     log.info("SP ファイル数: %d", len(files))
 
+    sp_file_ids = {f["id"] for f in files}
+
+    # 差分検知用: DB の既存ファイル
+    indexed = _get_indexed_files() if incremental else {}
+
     processed = 0
     skipped = 0
+    acl_updated = 0
+    deleted = 0
 
     for f in files:
         title = f["name"]
@@ -315,6 +370,20 @@ def run(incremental: bool = False):
         category = path.split("/")[0] if path else "root"
         source_url = f["webUrl"]
         file_id = f["id"]
+        last_modified = f["lastModified"]
+
+        # 差分チェック: incremental モードでは変更がないファイルをスキップ
+        if incremental and file_id in indexed:
+            # ACL だけ更新チェック
+            current_acl = get_folder_permissions(token, path)
+            _update_acl_only(file_id, current_acl)
+            acl_updated += 1
+
+            # ファイル内容が変わっていなければスキップ
+            # lastModifiedDateTime と DB の updated_at を比較
+            if last_modified <= indexed[file_id]:
+                skipped += 1
+                continue
 
         log.info("処理中: %s/%s", path, title)
 
@@ -345,7 +414,18 @@ def run(incremental: bool = False):
         upsert_chunks(file_id, title, source_url, category, allowed_groups, chunks, embeddings)
         processed += 1
 
-    log.info("=== インジェスト完了: %d 処理, %d スキップ ===", processed, skipped)
+    # SP から削除されたファイルを DB からも削除
+    if incremental and indexed:
+        for old_id in indexed:
+            if old_id not in sp_file_ids:
+                count = _delete_file_chunks(old_id)
+                log.info("削除: file_id=%s (%d chunks)", old_id, count)
+                deleted += count
+
+    log.info(
+        "=== インジェスト完了: %d 処理, %d スキップ, %d ACL更新, %d チャンク削除 ===",
+        processed, skipped, acl_updated, deleted,
+    )
 
 
 if __name__ == "__main__":
