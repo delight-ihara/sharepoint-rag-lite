@@ -5,6 +5,7 @@
 | 版数 | 日付 | 変更内容 |
 |------|------|----------|
 | 0.1 | 2026-03-26 | 初版作成 |
+| 0.2 | 2026-03-27 | Phase 0.1: エラーハンドリング・入力バリデーション・CORS 制限・Dockerfile 強化・pytest 追加 |
 
 ---
 
@@ -75,7 +76,7 @@ Blob Storage を中間ストレージとして使わない。Graph API で取得
 | 4 | エンベディング | Azure OpenAI text-embedding-3-small | 1536次元ベクトル生成 | 既存: text-embedding-3-large 3072次元（D-04） |
 | 5 | ベクトル DB | PostgreSQL + pgvector | ベクトル検索 + ACL フィルタ + 会話履歴 + クエリログ | 既存: AI Search + Cosmos DB |
 | 6 | 回答生成 | Azure OpenAI GPT-4o-mini | 根拠付き自然言語回答 | 同一 |
-| 7 | Web API | Python / FastAPI | クエリ処理・プロンプト構築・認証 | 既存: Azure Functions + App Service（2層） |
+| 7 | Web API | Python / FastAPI | クエリ処理・プロンプト構築・認証・入力バリデーション・エラーハンドリング | 既存: Azure Functions + App Service（2層） |
 | 8 | ホスティング | Azure Container Apps（Consumption） | API + UI のホスト | 既存: App Service B1 + Functions Y1 |
 | 9 | 認証 | Entra ID SSO | SSO + Graph API 認証 | 同一 |
 | 10 | シークレット | Azure Key Vault | API キー・接続文字列 | 同一 |
@@ -158,6 +159,25 @@ ingest.py --incremental
   → conversations テーブルに会話保存
   → query_logs テーブルにログ保存（ユーザー・クエリ・タイムスタンプ）
 ```
+
+### 5.4 エラーハンドリング方針
+
+| 障害箇所 | HTTP ステータス | ユーザーへの影響 | 方針 |
+|----------|---------------|----------------|------|
+| ベクトル検索（DB） | 503 | 回答不可 | エラーメッセージを返却。スタックトレースは非公開 |
+| LLM 回答生成（Azure OpenAI） | 503 | 回答不可 | 同上 |
+| 会話履歴取得（DB） | — | なし（空履歴で続行） | 非致命的。回答は返す |
+| 会話履歴保存（DB） | — | なし | 非致命的。回答は返す |
+| クエリログ保存（DB） | — | なし | 非致命的。回答は返す |
+| 未処理例外 | 500 | 回答不可 | グローバル例外ハンドラでキャッチ。日本語エラーメッセージを返却 |
+
+### 5.5 入力バリデーション
+
+| フィールド | 制約 | 超過時 |
+|-----------|------|--------|
+| message | 1〜2000文字。空白のみ不可。前後空白は自動除去 | 422 Unprocessable Entity |
+| session_id | 最大100文字 | 422 |
+| user_email | 最大254文字（RFC 5321） | 422 |
 
 ---
 

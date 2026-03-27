@@ -5,6 +5,7 @@
 | 版数 | 日付 | 変更内容 |
 |------|------|----------|
 | 0.1 | 2026-03-26 | 初版作成 |
+| 0.2 | 2026-03-27 | Phase 0.1: プロジェクト構造更新（tests/、.dockerignore）、Dockerfile 強化 |
 
 ---
 
@@ -220,13 +221,19 @@ az containerapp auth microsoft update \
 sharepoint-rag-lite/
 ├── docs/                    # 設計書（本ファイル群）
 ├── src/
+│   ├── api.py               # FastAPI エントリポイント（バリデーション・エラーハンドリング）
+│   ├── config.py            # 環境変数・設定（ALLOWED_ORIGINS 含む）
+│   ├── db.py                # PostgreSQL 接続プール管理
 │   ├── ingest.py            # SP → テキスト抽出 → pgvector
-│   ├── search.py            # ベクトル検索 + ACL フィルタ
 │   ├── llm.py               # 回答生成（既存 llm.py 流用）
-│   ├── api.py               # FastAPI エントリポイント
-│   └── config.py            # 環境変数・設定
+│   ├── search.py            # ベクトル検索 + ACL フィルタ
+│   └── static/index.html    # チャット UI
+├── tests/
+│   ├── conftest.py          # テストフィクスチャ（ダミー環境変数 + TestClient）
+│   └── test_api.py          # API ユニットテスト（15 ケース）
 ├── webapp/                  # チャット UI（既存 webapp 流用）
-├── Dockerfile
+├── .dockerignore            # ビルドコンテキスト除外
+├── Dockerfile               # non-root + HEALTHCHECK
 ├── requirements.txt
 └── README.md
 ```
