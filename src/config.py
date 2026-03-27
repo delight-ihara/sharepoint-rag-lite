@@ -27,5 +27,13 @@ ACL_ENABLED = os.environ.get("ACL_ENABLED", "true").lower() == "true"
 TARGET_FOLDERS_CSV = os.environ.get("SP_TARGET_FOLDERS", "")
 TARGET_FOLDERS = [f.strip() for f in TARGET_FOLDERS_CSV.split(",") if f.strip()] if TARGET_FOLDERS_CSV else []
 
+# CORS
+_ALLOWED_ORIGINS_CSV = os.environ.get("ALLOWED_ORIGINS", "")
+ALLOWED_ORIGINS = (
+    [o.strip() for o in _ALLOWED_ORIGINS_CSV.split(",") if o.strip()]
+    if _ALLOWED_ORIGINS_CSV
+    else ["*"]  # 未設定時は全許可（EasyAuth が前段で認証するため）
+)
+
 # Graph API base
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"

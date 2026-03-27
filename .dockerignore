@@ -1,0 +1,12 @@
+.git/
+.env*
+__pycache__/
+*.pyc
+.venv/
+tests/
+docs/
+*.md
+test_output.txt
+test_results.txt
+.dockerignore
+.gitignore
