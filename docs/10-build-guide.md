@@ -318,7 +318,130 @@ az containerapp update \
 
 ---
 
-## 8. PoC 終了後の削除
+## 8. Step 6: Application Insights セットアップ（NF-M01）
+
+```bash
+# Application Insights 作成
+az monitor app-insights component create \
+  --app appi-spraglite-poc-jpe \
+  --resource-group rg-spraglite-poc-jpe \
+  --location japaneast \
+  --kind web
+
+# 接続文字列を取得
+APPI_CONN=$(az monitor app-insights component show \
+  --app appi-spraglite-poc-jpe \
+  --resource-group rg-spraglite-poc-jpe \
+  --query connectionString -o tsv)
+
+# Container App に環境変数として設定
+az containerapp update \
+  --name ca-spraglite-poc-jpe \
+  --resource-group rg-spraglite-poc-jpe \
+  --set-env-vars "APPLICATIONINSIGHTS_CONNECTION_STRING=$APPI_CONN"
+```
+
+Python 側: `azure-monitor-opentelemetry` パッケージで自動計装。
+
+---
+
+## 9. Step 7: Key Vault 統合（F-12）
+
+### 9.1 シークレット移行
+
+Key Vault に全シークレットを格納し、環境変数からの直接参照を廃止。
+
+```bash
+# シークレット 3 件が登録済みであることを確認
+az keyvault secret list --vault-name kv-spraglite-poc-jpe --query "[].name" -o tsv
+# 期待: AZURE-OPENAI-KEY, DATABASE-URL, GRAPH-CLIENT-SECRET
+```
+
+### 9.2 アプリケーション設定
+
+Container App の環境変数を Key Vault 参照に変更:
+
+```bash
+az containerapp update \
+  --name ca-spraglite-poc-jpe \
+  --resource-group rg-spraglite-poc-jpe \
+  --set-env-vars \
+    "KEY_VAULT_NAME=kv-spraglite-poc-jpe"
+```
+
+`src/config.py` が `DefaultAzureCredential` → Key Vault から自動取得。ローカル開発は `.env.local` フォールバック。
+
+---
+
+## 10. Step 8: CI/CD セットアップ（F-13）
+
+### 10.1 GitHub Actions ワークフロー
+
+```
+.github/workflows/
+├── ci.yml        # PR: ruff lint + pytest
+└── deploy.yml    # main push: Docker build → ACR push → Container Apps update
+```
+
+### 10.2 GitHub Secrets 登録
+
+| Secret 名 | 内容 |
+|-----------|------|
+| `AZURE_CREDENTIALS` | Service Principal JSON（az ad sp create-for-rbac） |
+| `ACR_LOGIN_SERVER` | `cade499ab873acr.azurecr.io` |
+| `ACR_USERNAME` | ACR ユーザー名 |
+| `ACR_PASSWORD` | ACR パスワード |
+
+### 10.3 Service Principal 作成
+
+```bash
+az ad sp create-for-rbac --name sp-spraglite-cicd \
+  --role contributor \
+  --scopes /subscriptions/<SUB_ID>/resourceGroups/rg-spraglite-poc-jpe \
+  --sdk-auth
+# 出力 JSON を GitHub Secrets の AZURE_CREDENTIALS に登録
+```
+
+---
+
+## 11. Step 9: GraphRAG テーブル作成（F-14）
+
+Supabase SQL Editor で実行:
+
+```sql
+-- pg_trgm 拡張を有効化（エンティティ名のあいまい検索用）
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- エンティティテーブル
+CREATE TABLE entities (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL,
+    type        TEXT NOT NULL,
+    properties  JSONB DEFAULT '{}',
+    created_at  TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_entities_name ON entities USING gin (name gin_trgm_ops);
+CREATE INDEX idx_entities_type ON entities (type);
+
+-- 関係テーブル
+CREATE TABLE relations (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    from_entity_id  UUID REFERENCES entities(id),
+    to_entity_id    UUID REFERENCES entities(id),
+    relation_type   TEXT NOT NULL,
+    source_chunk_id TEXT REFERENCES chunks(chunk_id),
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_relations_from ON relations (from_entity_id);
+CREATE INDEX idx_relations_to ON relations (to_entity_id);
+CREATE INDEX idx_relations_chunk ON relations (source_chunk_id);
+```
+
+---
+
+## 12. PoC 終了後の削除
 
 ```bash
 # Azure リソース

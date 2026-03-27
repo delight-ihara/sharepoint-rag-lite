@@ -6,6 +6,7 @@
 |------|------|----------|
 | 0.1 | 2026-03-26 | 初版作成。既存 03-security.md をベースに Lite 構成向けに改訂 |
 | 0.2 | 2026-03-27 | Phase 0.1: CORS 制限・入力バリデーション・エラーハンドリング・Dockerfile 強化を追記 |
+| 0.3 | 2026-03-27 | Phase 0 全体: Key Vault 統合方式・GraphRAG データ分類・CI/CD セキュリティを追記 |
 
 ---
 
@@ -236,6 +237,32 @@ LIMIT 10;
 - 全シークレットは Key Vault に一元化し、環境変数への直書きを禁止
 - Key Vault へのアクセスは RBAC モデル
 - アプリケーションには読み取り専用ロール（Secrets User）のみ付与
+
+### 7.3 Key Vault 統合方式（F-12）
+
+```python
+# src/config.py での実装方針
+from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
+
+# 1. Key Vault から取得を試行
+# 2. 失敗時は環境変数にフォールバック（ローカル開発用）
+```
+
+| 環境 | 認証方式 | シークレット取得元 |
+|------|---------|----------------|
+| Container Apps（本番） | マネージド ID → DefaultAzureCredential | Key Vault |
+| ローカル開発 | 環境変数（.env.local） | 環境変数フォールバック |
+| CI/CD（GitHub Actions） | GitHub Secrets → 環境変数 | 環境変数フォールバック |
+
+### 7.4 CI/CD セキュリティ（F-13）
+
+| 項目 | 設計 |
+|------|------|
+| シークレット格納 | GitHub Actions Secrets（ACR パスワード・DB 接続文字列） |
+| テスト時のシークレット | ダミー値（conftest.py でモック） |
+| イメージレジストリ | ACR（Azure Container Registry）。Docker Hub は使わない |
+| デプロイ認証 | Azure Service Principal（OIDC 推奨） |
 
 ---
 

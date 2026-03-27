@@ -5,6 +5,7 @@
 | 版数 | 日付 | 変更内容 |
 |------|------|----------|
 | 0.1 | 2026-03-26 | 初版作成 |
+| 0.2 | 2026-03-27 | Phase 0: Application Insights・GraphRAG テーブル追加、コスト更新 |
 
 ---
 
@@ -34,12 +35,14 @@
 | 3 | Key Vault | `kv` | `kv-spraglite-poc-jpe` | シークレット 3 件 |
 | 4 | Container Apps Environment | `cae` | `cae-spraglite-poc-jpe` | Consumption プラン |
 | 5 | Container App | `ca` | `ca-spraglite-poc-jpe` | FastAPI アプリ |
+| 7 | Application Insights | `appi` | `appi-spraglite-poc-jpe` | 監視・テレメトリ |
 
 **Azure 外リソース（PoC）**:
 
 | # | サービス | 名称 | 備考 |
 |---|---------|------|------|
-| 6 | Supabase Project | `spraglite-poc` | pgvector 対応。Free プラン |
+| 6 | `spraglite-poc`（Supabase） | PostgreSQL + pgvector | Free | 500MB / ap-northeast-1 | ベクトル DB + 会話履歴 + クエリログ + GraphRAG | — |
+| 7 | `appi-spraglite-poc-jpe` | Application Insights | — | Japan East / OpenTelemetry SDK | 監視・アラート | #4 |
 
 ### タギング戦略
 
@@ -69,7 +72,7 @@
 
 ### 既存構成との比較
 
-| 項目 | 既存構成（12リソース） | Lite 構成（6リソース） |
+| 項目 | 既存構成（12リソース） | Lite 構成（7リソース） |
 |------|---------------------|---------------------|
 | AI Search S1 | ○ | **削除** |
 | Cosmos DB | ○ | **削除**（PostgreSQL に統合） |
@@ -78,7 +81,7 @@
 | Cognitive Services | ○ | **削除** |
 | App Service B1 | ○ | **削除**（Container Apps に統合） |
 | Azure Functions | ○ | **削除**（Container Apps に統合） |
-| Application Insights | ○ | **削除**（query_logs テーブルで代替） |
+| Application Insights | ○ | **新規**（OpenTelemetry SDK で統合） |
 | Azure OpenAI | ○ | **流用** |
 | Entra ID アプリ | ○ | **流用** |
 | Key Vault | ○ | **新規**（既存と別名） |
@@ -128,6 +131,7 @@
 | 3 | **Container Apps** | Consumption | 従量 | ~$0-3 | ~¥0-450 | スケールゼロ。月180K vCPU-s 無料枠内 |
 | 4 | **Key Vault** | Standard | 従量 | ~$0.01 | ~¥2 | $0.03/10,000操作 |
 | 5 | **Supabase** | Free | 無料 | $0 | ¥0 | 500MB / pgvector |
+| 6 | **Application Insights** | — | 従量 | ~$0 | ~¥0 | 5GB/月無料枠内 |
 | | | | **合計** | **~$0.50-3.50** | **~¥75-525** | |
 
 ### 既存構成との比較
@@ -166,7 +170,8 @@
 | 4 | Container Apps Environment | RG | 3分 | |
 | 5 | Container App + EasyAuth | #3, #4 | 10分 | Entra ID SSO 設定含む |
 | 6 | RBAC 設定（3件） | #5 | 5分 | |
-| | **合計** | | **約 35分** | 既存構成（約1.5時間）の半分以下 |
+| 7 | Application Insights | RG | 3分 | OpenTelemetry 接続文字列を Container App に設定 |
+| | **合計** | | **約 40分** | 既存構成（約1.5時間）の半分以下 |
 
 > Entra ID アプリ・Azure OpenAI は既存リソースを流用するため新規作成不要。
 

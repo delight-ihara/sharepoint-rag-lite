@@ -6,6 +6,7 @@
 |------|------|----------|
 | 0.1 | 2026-03-26 | 初版作成 |
 | 0.2 | 2026-03-27 | Phase 0.1: エラーハンドリング・入力バリデーション・CORS 制限・Dockerfile 強化・pytest 追加 |
+| 0.3 | 2026-03-27 | Phase 0 全体: クエリリライト・ストリーミング・Key Vault・CI/CD・監視・GraphRAG の設計追記 |
 
 ---
 
@@ -18,6 +19,8 @@
 | 3 | PoC 構成 + スケール設計 | 10名・100件以上で構築。100-300名へのパスは本書に記載 |
 | 4 | セキュリティ バイ デザイン | ACL を初期構築から組み込む（既存構成と同一水準） |
 | 5 | 段階的精度改善 | ベクトル検索のみ → Cohere Rerank → RRF → embedding-large の順に追加。70% 達成で止める |
+| 6 | GraphRAG 統合 | PostgreSQL 内にエンティティ・関係グラフを構築。Neo4j 等の追加インフラ不要 |
+| 7 | Observable by Default | Application Insights + OpenTelemetry で全リクエストを可視化 |
 
 ---
 
@@ -34,22 +37,30 @@
     ├─ テキスト抽出（PyMuPDF / python-docx / openpyxl）
     ├─ チャンキング（1024トークン / 200オーバーラップ）
     ├─ エンベディング（Azure OpenAI text-embedding-3-small）
-    └─ DB 書き込み（チャンク + ベクトル + ACL メタデータ）
+    ├─ GraphRAG エンティティ抽出（GPT-4o-mini → entities/relations テーブル）
+    └─ DB 書き込み（チャンク + ベクトル + ACL + エンティティ）
     │
     ▼
 [PostgreSQL + pgvector]
     ├─ chunks テーブル（ベクトル検索 + ACL フィルタ）
+    ├─ entities / relations テーブル（GraphRAG）
     ├─ conversations テーブル（会話履歴）
     └─ query_logs テーブル（クエリログ）
     │
     ▼
-[Azure Container Apps / App Service]
+[Azure Container Apps]
     ├─ Web API（Python / FastAPI）
     │    ├─ Entra ID SSO（ユーザー email 抽出）
+    │    ├─ クエリリライト（会話文脈 → 自己完結クエリに書き換え）
     │    ├─ pgvector ベクトル検索 + ACL WHERE 句
+    │    ├─ GraphRAG グラフ探索（エンティティ起点）
     │    ├─ （段階的）Cohere Rerank / RRF
-    │    └─ Azure OpenAI GPT-4o-mini → 根拠リンク付き回答
-    └─ チャット UI（既存 webapp 流用 or 簡易 SPA）
+    │    ├─ Azure OpenAI GPT-4o-mini → 根拠リンク付き回答
+    │    └─ SSE ストリーミング応答（/chat/stream）
+    └─ チャット UI（SSE 対応 SPA）
+    │
+    ├─→ [Key Vault] シークレット参照（DefaultAzureCredential）
+    └─→ [Application Insights] テレメトリ（OpenTelemetry SDK）
     │
     ▼
 ユーザー
@@ -81,13 +92,15 @@ Blob Storage を中間ストレージとして使わない。Graph API で取得
 | 9 | 認証 | Entra ID SSO | SSO + Graph API 認証 | 同一 |
 | 10 | シークレット | Azure Key Vault | API キー・接続文字列 | 同一 |
 
+| 11 | 監視 | Application Insights（OpenTelemetry SDK） | リクエストログ・エラー率・応答速度の可視化 | 既存: Application Insights（同等） |
+| 12 | GraphRAG | PostgreSQL（JSONB + 再帰 CTE） | エンティティ・関係グラフの格納・探索 | 新規（既存構成になし） |
+
 **削除されたコンポーネント**（コスト削減）:
 - Azure AI Search（S1）→ pgvector で代替
 - Cosmos DB → PostgreSQL で統合
 - Blob Storage（中間格納用）→ 不要
 - Document Intelligence → Python ライブラリで代替
 - Cognitive Services マルチサービス → 不要
-- Application Insights → PoC では省略（外販時に追加）
 
 ---
 
@@ -160,7 +173,87 @@ ingest.py --incremental
   → query_logs テーブルにログ保存（ユーザー・クエリ・タイムスタンプ）
 ```
 
-### 5.4 エラーハンドリング方針
+### 5.4 クエリリライト（F-11）
+
+会話文脈を踏まえた検索クエリの自律書き換え。「それについて詳しく」→「就業規則の有給休暇について詳しく」のように、代名詞や省略を解決する。
+
+```
+ユーザー: 「それについて詳しく」
+    ↓
+GPT-4o-mini（1回呼び出し）:
+  入力: 直近の会話履歴 + 現在のクエリ
+  出力: 自己完結する検索クエリ（「就業規則の有給休暇の詳細」）
+    ↓
+書き換え後クエリでベクトル検索実行
+```
+
+- 実装場所: `src/api.py` の `/chat` エンドポイント、検索の前
+- コスト影響: GPT-4o-mini 1 回追加呼び出し（~100トークン/回、月額 ~¥10 増）
+- 会話履歴がない初回クエリはリライトをスキップ
+
+### 5.5 ストリーミング応答（F-10）
+
+SSE（Server-Sent Events）でトークン単位の逐次応答。
+
+```
+POST /chat/stream
+  ↓ SSE
+data: {"type": "chunk", "content": "情報セキュ"}
+data: {"type": "chunk", "content": "リティの"}
+...
+data: {"type": "done", "citations": [...], "session_id": "..."}
+```
+
+- 既存の `/chat` エンドポイントは互換性のため残す
+- UI は EventSource API で受信し、リアルタイム表示
+- 実装: `src/llm.py` に `generate_answer_stream()` 追加、`src/api.py` に `/chat/stream` 追加
+
+### 5.6 GraphRAG（F-14）
+
+ベクトル検索では捉えきれない「関係性」ベースのクエリに対応する。
+
+```
+インジェスト時:
+  チャンクテキスト → GPT-4o-mini でエンティティ抽出
+  → entities テーブル (name, type, properties)
+  → relations テーブル (from_id, to_id, relation_type, source_chunk_id)
+
+クエリ時:
+  1. クエリからエンティティを抽出
+  2. entities テーブルでマッチするエンティティを検索
+  3. relations テーブルで 1-2 ホップの関連エンティティ・チャンクを取得
+  4. ベクトル検索結果とマージして LLM に渡す
+```
+
+DB 設計:
+
+```sql
+CREATE TABLE entities (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL,
+    type        TEXT NOT NULL,  -- 'person' | 'organization' | 'project' | 'document'
+    properties  JSONB DEFAULT '{}',
+    created_at  TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE relations (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    from_entity_id  UUID REFERENCES entities(id),
+    to_entity_id    UUID REFERENCES entities(id),
+    relation_type   TEXT NOT NULL,  -- 'authored' | 'approved' | 'belongs_to' | 'mentions'
+    source_chunk_id TEXT REFERENCES chunks(chunk_id),
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_entities_name ON entities USING gin (name gin_trgm_ops);
+CREATE INDEX idx_relations_from ON relations (from_entity_id);
+CREATE INDEX idx_relations_to ON relations (to_entity_id);
+```
+
+- Neo4j 等の専用グラフ DB は使わない。PostgreSQL の再帰 CTE で 1-2 ホップ探索は十分な性能
+- エンティティ抽出の精度は GPT-4o-mini に依存。誤抽出のリスクあり（R-06）
+
+### 5.7 エラーハンドリング方針
 
 | 障害箇所 | HTTP ステータス | ユーザーへの影響 | 方針 |
 |----------|---------------|----------------|------|
@@ -171,7 +264,7 @@ ingest.py --incremental
 | クエリログ保存（DB） | — | なし | 非致命的。回答は返す |
 | 未処理例外 | 500 | 回答不可 | グローバル例外ハンドラでキャッチ。日本語エラーメッセージを返却 |
 
-### 5.5 入力バリデーション
+### 5.8 入力バリデーション
 
 | フィールド | 制約 | 超過時 |
 |-----------|------|--------|
@@ -248,12 +341,18 @@ Supabase Free（500MB）に十分収まる。
 
 ## 7. 認証経路
 
-| 経路 | 方式（PoC） | 100-300名時 |
-|------|------------|------------|
-| ユーザー → Container Apps | Entra ID SSO（EasyAuth or MSAL） | + 条件付きアクセス |
-| API → Graph API | クライアントシークレット | 証明書認証 |
-| API → Azure OpenAI | API キー（Key Vault） | マネージド ID |
-| API → PostgreSQL | 接続文字列（環境変数 or Key Vault） | マネージド ID（Azure PostgreSQL 時） |
+| 経路 | 方式 | 100-300名時 |
+|------|------|------------|
+| ユーザー → Container Apps | Entra ID SSO（EasyAuth） | + 条件付きアクセス |
+| API → Graph API | クライアントシークレット（Key Vault 参照） | 証明書認証 |
+| API → Azure OpenAI | API キー（Key Vault 参照、DefaultAzureCredential） | マネージド ID |
+| API → PostgreSQL | 接続文字列（Key Vault 参照） | マネージド ID（Azure PostgreSQL 時） |
+| API → Key Vault | マネージド ID（RBAC: Key Vault Secrets User） | 同左 |
+
+**Key Vault 統合方針（F-12）**:
+- `src/config.py` で `azure-keyvault-secrets` + `DefaultAzureCredential` を使用
+- Key Vault 到達不可時は環境変数にフォールバック（ローカル開発用）
+- Container Apps のマネージド ID で Key Vault にアクセス（API キー不要）
 
 ---
 
@@ -299,10 +398,47 @@ Supabase Free（500MB）に十分収まる。
 | F-07 ACL 制御 | allowed_groups[] + SQL WHERE 句 |
 | F-08 クエリログ | PostgreSQL query_logs テーブル |
 | F-09 権限同期 | ingest.py --incremental（cron 実行） |
+| F-10 ストリーミング応答 | `/chat/stream` SSE エンドポイント + EventSource UI |
+| F-11 クエリリライト | GPT-4o-mini で会話文脈を踏まえた検索クエリ書き換え |
+| F-12 シークレット安全化 | Key Vault + DefaultAzureCredential（環境変数フォールバック） |
+| F-13 CI/CD | GitHub Actions（PR: lint + pytest / main: ACR build + Container Apps deploy） |
+| F-14 GraphRAG | PostgreSQL JSONB + 再帰 CTE（entities / relations テーブル） |
+| NF-M01 監視 | Application Insights + OpenTelemetry SDK |
 
 ---
 
-## 11. 関連文書
+## 11. CI/CD パイプライン（F-13）
+
+```
+PR → GitHub Actions:
+  1. ruff check src/（lint）
+  2. python -m pytest tests/ -v（ユニットテスト）
+  3. ステータスチェック → マージ可否
+
+main push → GitHub Actions:
+  1. Docker build
+  2. ACR push（cade499ab873acr.azurecr.io）
+  3. az containerapp update（ca-spraglite-poc-jpe）
+```
+
+ファイル:
+- `.github/workflows/ci.yml`: PR 時の lint + test
+- `.github/workflows/deploy.yml`: main push 時のビルド + デプロイ
+
+---
+
+## 12. 監視（NF-M01）
+
+| 項目 | 設計 |
+|------|------|
+| SDK | OpenTelemetry（`azure-monitor-opentelemetry`） |
+| 収集対象 | リクエスト / 依存関係（DB, OpenAI）/ 例外 / カスタムメトリクス |
+| アラート | エラー率 5%+ / P95 応答時間 > 10秒 |
+| ダッシュボード | Azure Portal Application Insights |
+
+---
+
+## 13. 関連文書
 
 | 文書 | 内容 |
 |------|------|
