@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SharePoint RAG</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --surface: rgba(255,255,255,0.04);
+  --surface-hover: rgba(255,255,255,0.08);
+  --border: rgba(255,255,255,0.08);
+  --text: #e4e4e7;
+  --text-muted: #71717a;
+  --accent: #818cf8;
+  --accent-glow: rgba(129,140,248,0.15);
+  --user-bg: rgba(129,140,248,0.1);
+  --ai-bg: rgba(255,255,255,0.03);
+  --radius: 16px;
+  --radius-sm: 12px;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Header */
+.header {
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(20px);
+  background: rgba(10,10,15,0.8);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 10;
+}
+
+.header-icon {
+  width: 36px; height: 36px;
+  background: linear-gradient(135deg, var(--accent), #6366f1);
+  border-radius: 10px;
+  display: grid; place-items: center;
+  font-size: 18px;
+}
+
+.header-title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.header-badge {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--surface);
+  padding: 3px 8px;
+  border-radius: 6px;
+  margin-left: auto;
+}
+
+/* Messages */
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  scroll-behavior: smooth;
+}
+
+.messages::-webkit-scrollbar { width: 4px; }
+.messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.msg {
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  gap: 12px;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.msg-avatar {
+  width: 32px; height: 32px;
+  border-radius: 10px;
+  display: grid; place-items: center;
+  font-size: 14px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.msg-user .msg-avatar {
+  background: var(--user-bg);
+  border: 1px solid rgba(129,140,248,0.2);
+}
+
+.msg-ai .msg-avatar {
+  background: linear-gradient(135deg, var(--accent), #6366f1);
+}
+
+.msg-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.msg-content {
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg-user .msg-content {
+  background: var(--user-bg);
+  border: 1px solid rgba(129,140,248,0.12);
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  border-top-left-radius: 4px;
+}
+
+.msg-ai .msg-content {
+  padding: 4px 0;
+}
+
+/* Citations */
+.citations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.citation {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--accent-glow);
+  border: 1px solid rgba(129,140,248,0.15);
+  padding: 6px 12px;
+  border-radius: 8px;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+
+.citation:hover {
+  background: rgba(129,140,248,0.25);
+  border-color: rgba(129,140,248,0.3);
+}
+
+.citation-num {
+  width: 18px; height: 18px;
+  background: var(--accent);
+  color: #0a0a0f;
+  border-radius: 5px;
+  display: grid; place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* Welcome */
+.welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 40px;
+  text-align: center;
+}
+
+.welcome-icon {
+  width: 64px; height: 64px;
+  background: linear-gradient(135deg, var(--accent), #6366f1);
+  border-radius: 20px;
+  display: grid; place-items: center;
+  font-size: 28px;
+  box-shadow: 0 8px 32px var(--accent-glow);
+}
+
+.welcome h2 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.welcome p {
+  font-size: 14px;
+  color: var(--text-muted);
+  max-width: 360px;
+  line-height: 1.6;
+}
+
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+.suggestion {
+  font-size: 13px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 10px 16px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.suggestion:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  border-color: rgba(255,255,255,0.15);
+}
+
+/* Input */
+.input-area {
+  padding: 16px 24px 24px;
+  background: rgba(10,10,15,0.9);
+  backdrop-filter: blur(20px);
+  border-top: 1px solid var(--border);
+}
+
+.input-wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  position: relative;
+}
+
+.input-box {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 56px 16px 20px;
+  color: var(--text);
+  font-size: 14.5px;
+  font-family: inherit;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+  min-height: 52px;
+  max-height: 160px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.input-box::placeholder { color: var(--text-muted); }
+
+.input-box:focus {
+  border-color: rgba(129,140,248,0.4);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.send-btn {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 38px; height: 38px;
+  background: var(--accent);
+  border: none;
+  border-radius: 10px;
+  color: #0a0a0f;
+  cursor: pointer;
+  display: grid; place-items: center;
+  transition: all 0.2s;
+}
+
+.send-btn:hover { background: #a5b4fc; transform: scale(1.05); }
+.send-btn:disabled { opacity: 0.3; cursor: not-allowed; transform: none; }
+
+.send-btn svg { width: 18px; height: 18px; }
+
+/* Loading */
+.loading-dots {
+  display: inline-flex;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.loading-dots span {
+  width: 6px; height: 6px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  animation: bounce 1.4s ease-in-out infinite;
+}
+
+.loading-dots span:nth-child(2) { animation-delay: 0.16s; }
+.loading-dots span:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes bounce {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+/* Mobile */
+@media (max-width: 640px) {
+  .header { padding: 12px 16px; }
+  .messages { padding: 16px; }
+  .input-area { padding: 12px 16px 16px; }
+  .suggestions { flex-direction: column; }
+  .suggestion { text-align: left; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-icon">⚡</div>
+  <div class="header-title">SharePoint RAG</div>
+  <div class="header-badge">Lite</div>
+</div>
+
+<div class="messages" id="messages">
+  <div class="welcome" id="welcome">
+    <div class="welcome-icon">🔍</div>
+    <h2>社内文書を検索</h2>
+    <p>SharePoint 上の文書から、AIが根拠付きで回答します。アクセス権限のある文書のみが検索対象です。</p>
+    <div class="suggestions">
+      <div class="suggestion" onclick="ask(this.textContent)">情報セキュリティの基本方針は？</div>
+      <div class="suggestion" onclick="ask(this.textContent)">就業規則の内容を教えて</div>
+      <div class="suggestion" onclick="ask(this.textContent)">補助金に関する規定は？</div>
+    </div>
+  </div>
+</div>
+
+<div class="input-area">
+  <div class="input-wrap">
+    <textarea class="input-box" id="input" placeholder="質問を入力..." rows="1"
+      onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send()}"
+      oninput="autoResize(this)"></textarea>
+    <button class="send-btn" id="sendBtn" onclick="send()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 12h14M12 5l7 7-7 7"/>
+      </svg>
+    </button>
+  </div>
+</div>
+
+<script>
+const messagesEl = document.getElementById('messages');
+const inputEl = document.getElementById('input');
+const sendBtn = document.getElementById('sendBtn');
+const welcomeEl = document.getElementById('welcome');
+let sessionId = '';
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+}
+
+function ask(text) {
+  inputEl.value = text;
+  send();
+}
+
+function addMessage(role, content, citations) {
+  if (welcomeEl) welcomeEl.remove();
+
+  const msg = document.createElement('div');
+  msg.className = `msg msg-${role}`;
+
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = role === 'user' ? '👤' : '⚡';
+
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+
+  const contentEl = document.createElement('div');
+  contentEl.className = 'msg-content';
+  contentEl.textContent = content;
+  body.appendChild(contentEl);
+
+  if (citations && citations.length > 0) {
+    const citEl = document.createElement('div');
+    citEl.className = 'citations';
+    citations.forEach(c => {
+      const a = document.createElement('a');
+      a.className = 'citation';
+      a.href = c.source_url;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.innerHTML = `<span class="citation-num">${c.index}</span>${c.title}`;
+      citEl.appendChild(a);
+    });
+    body.appendChild(citEl);
+  }
+
+  msg.appendChild(avatar);
+  msg.appendChild(body);
+  messagesEl.appendChild(msg);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return msg;
+}
+
+function addLoading() {
+  const msg = document.createElement('div');
+  msg.className = 'msg msg-ai';
+  msg.id = 'loading';
+  msg.innerHTML = `
+    <div class="msg-avatar">⚡</div>
+    <div class="msg-body">
+      <div class="loading-dots"><span></span><span></span><span></span></div>
+    </div>`;
+  messagesEl.appendChild(msg);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function removeLoading() {
+  const el = document.getElementById('loading');
+  if (el) el.remove();
+}
+
+async function send() {
+  const text = inputEl.value.trim();
+  if (!text) return;
+
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+  sendBtn.disabled = true;
+
+  addMessage('user', text);
+  addLoading();
+
+  try {
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, session_id: sessionId }),
+    });
+
+    const data = await res.json();
+    removeLoading();
+
+    if (data.answer) {
+      addMessage('ai', data.answer, data.citations);
+      sessionId = data.session_id || sessionId;
+    } else {
+      addMessage('ai', 'エラーが発生しました。');
+    }
+  } catch (e) {
+    removeLoading();
+    addMessage('ai', '接続エラーが発生しました。');
+  }
+
+  sendBtn.disabled = false;
+  inputEl.focus();
+}
+
+inputEl.focus();
+</script>
+</body>
+</html>
