@@ -32,14 +32,12 @@ from src.llm import generate_answer
 
 DB = os.environ["DATABASE_URL"]
 
-# ACL mapping (from actual DB data)
-# 01_keiei: yamanaka, ihara, inoue
-# 02_jinji: ihara, inoue
-# 03_eigyo: yamanaka, ihara, okada, inoue
-BOSS = "s.yamanaka@delight-x.co.jp"
-MEMBER = "t.inoue@delight-x.co.jp"
-SALES = "r.okada@delight-x.co.jp"
-GENERAL = "nobody@delight-x.co.jp"
+# ACL mapping — set via env vars or override here
+# Folder permissions: 01_keiei (boss+member), 02_jinji (member), 03_eigyo (boss+member+sales)
+BOSS = os.environ.get("TEST_BOSS_EMAIL", "boss@example.com")
+MEMBER = os.environ.get("TEST_MEMBER_EMAIL", "member@example.com")
+SALES = os.environ.get("TEST_SALES_EMAIL", "sales@example.com")
+GENERAL = os.environ.get("TEST_GENERAL_EMAIL", "nobody@example.com")
 
 results = []
 response_times = []

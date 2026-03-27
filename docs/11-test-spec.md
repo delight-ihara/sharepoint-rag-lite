@@ -163,10 +163,10 @@
 
 | ロール | メールアドレス | 可視フォルダ |
 |--------|-------------|------------|
-| 経営層 (BOSS) | s.yamanaka@delight-x.co.jp | 01 + 02 + 03 |
-| メンバー (MEMBER) | t.inoue@delight-x.co.jp | 01 + 02 + 03 |
-| 営業 (SALES) | r.okada@delight-x.co.jp | 03 のみ |
-| 一般 (GENERAL) | nobody@delight-x.co.jp | なし |
+| 経営層 (BOSS) | boss@example.com | 01 + 02 + 03 |
+| メンバー (MEMBER) | member@example.com | 01 + 02 + 03 |
+| 営業 (SALES) | sales@example.com | 03 のみ |
+| 一般 (GENERAL) | nobody@example.com | なし |
 
 ### 主要指標
 
