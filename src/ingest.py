@@ -14,8 +14,16 @@ from urllib.parse import quote
 import fitz  # PyMuPDF
 import requests
 from docx import Document as DocxDocument
+from openai import APIConnectionError, APIStatusError, AzureOpenAI, RateLimitError
 from openpyxl import load_workbook
-from openai import AzureOpenAI
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from .config import (
     AZURE_OPENAI_ENDPOINT,
@@ -33,8 +41,35 @@ from .db import get_conn, put_conn
 
 log = logging.getLogger(__name__)
 
+
+def _is_transient_openai_error(exc: BaseException) -> bool:
+    """リトライ対象の OpenAI 一時エラーか判定"""
+    if isinstance(exc, (RateLimitError, APIConnectionError)):
+        return True
+    if isinstance(exc, APIStatusError) and exc.status_code in (502, 503, 504):
+        return True
+    return False
+
+
+def _is_transient_http_error(exc: BaseException) -> bool:
+    """リトライ対象の HTTP 一時エラーか判定"""
+    if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return True
+    if isinstance(exc, requests.exceptions.HTTPError) and exc.response is not None:
+        if exc.response.status_code in (429, 502, 503, 504):
+            return True
+    return False
+
+
 # ── Graph API 認証 ──────────────────────────────────────
 
+@retry(
+    retry=retry_if_exception(_is_transient_http_error),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    stop=stop_after_attempt(3),
+    before_sleep=before_sleep_log(log, logging.WARNING),
+    reraise=True,
+)
 def get_graph_token() -> str:
     """クライアントシークレットで Graph API トークンを取得"""
     url = f"https://login.microsoftonline.com/{GRAPH_TENANT_ID}/oauth2/v2.0/token"
@@ -143,8 +178,15 @@ def list_sp_files(token: str) -> list[dict]:
     return files
 
 
+@retry(
+    retry=retry_if_exception(_is_transient_http_error),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    stop=stop_after_attempt(3),
+    before_sleep=before_sleep_log(log, logging.WARNING),
+    reraise=True,
+)
 def download_file(token: str, file_id: str) -> bytes:
-    """ファイルのバイナリをダウンロード"""
+    """ファイルのバイナリをダウンロード（リトライ付き）"""
     headers = {"Authorization": f"Bearer {token}"}
     url = f"{GRAPH_BASE}/drives/{SP_DRIVE_ID}/items/{file_id}/content"
     resp = requests.get(url, headers=headers, timeout=60)
@@ -224,7 +266,7 @@ def _extract_pptx(content: bytes) -> str:
 # ── チャンキング ───────────────────────────────────────
 
 def chunk_text(text: str, chunk_size: int = 1024, overlap: int = 200) -> list[str]:
-    """トークン近似のチャンク分割（文字数ベース、1トークン≒2文字で概算）"""
+    """固定長チャンク分割（フォールバック用）"""
     char_size = chunk_size * 2
     char_overlap = overlap * 2
 
@@ -243,7 +285,105 @@ def chunk_text(text: str, chunk_size: int = 1024, overlap: int = 200) -> list[st
     return chunks
 
 
+import math
+import re
+
+
+def _split_sentences(text: str) -> list[str]:
+    """テキストを文単位で分割（日本語・英語対応）"""
+    # 段落（空行）→ 文末句読点で分割
+    parts = re.split(r'(?<=[。！？\.\!\?\n])\s*', text)
+    sentences = [s.strip() for s in parts if s.strip()]
+    return sentences if sentences else [text.strip()] if text.strip() else []
+
+
+def _cosine_sim(a: list[float], b: list[float]) -> float:
+    """コサイン類似度（pure Python）"""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def semantic_chunk_text(
+    text: str,
+    max_chars: int = 2048,
+    min_chars: int = 100,
+    breakpoint_percentile: int = 25,
+) -> list[str]:
+    """セマンティックチャンキング: 文の埋め込み類似度で意味境界を検出して分割
+
+    1. 文に分割
+    2. 各文を埋め込み
+    3. 隣接文の類似度が低い箇所（話題の変わり目）で分割
+    4. max_chars / min_chars で調整
+    """
+    if not text.strip():
+        return []
+    if len(text) <= max_chars:
+        return [text.strip()]
+
+    sentences = _split_sentences(text)
+    if len(sentences) <= 1:
+        return [text.strip()]
+
+    # 文のエンベディングを取得（バッチ）
+    try:
+        embeddings = get_embeddings(sentences)
+    except Exception:
+        log.warning("セマンティックチャンキング失敗 → 固定長フォールバック")
+        return chunk_text(text)
+
+    # 隣接文間のコサイン類似度
+    similarities = []
+    for i in range(len(embeddings) - 1):
+        similarities.append(_cosine_sim(embeddings[i], embeddings[i + 1]))
+
+    # ブレークポイント閾値（パーセンタイル）
+    sorted_sims = sorted(similarities)
+    idx = max(0, int(len(sorted_sims) * breakpoint_percentile / 100) - 1)
+    threshold = sorted_sims[idx] if sorted_sims else 0.5
+
+    # 意味境界で分割
+    chunks = []
+    current = sentences[0]
+
+    for i in range(1, len(sentences)):
+        candidate = current + "\n" + sentences[i]
+
+        # 類似度が閾値未満 = 話題が変わった → 分割
+        if similarities[i - 1] < threshold and len(current) >= min_chars:
+            chunks.append(current.strip())
+            current = sentences[i]
+        # max_chars 超過 → 強制分割
+        elif len(candidate) > max_chars and len(current) >= min_chars:
+            chunks.append(current.strip())
+            current = sentences[i]
+        else:
+            current = candidate
+
+    if current.strip():
+        chunks.append(current.strip())
+
+    return [c for c in chunks if c]
+
+
 # ── エンベディング ─────────────────────────────────────
+
+@retry(
+    retry=retry_if_exception(_is_transient_openai_error),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    stop=stop_after_attempt(3),
+    before_sleep=before_sleep_log(log, logging.WARNING),
+    reraise=True,
+)
+def _embed_batch(client: AzureOpenAI, batch: list[str]) -> list[list[float]]:
+    """エンベディングバッチ呼び出し（リトライ付き）"""
+    resp = client.embeddings.create(input=batch, model=EMBEDDING_DEPLOYMENT)
+    return [d.embedding for d in resp.data]
+
 
 def get_embeddings(texts: list[str]) -> list[list[float]]:
     """Azure OpenAI でエンベディングを生成"""
@@ -257,8 +397,7 @@ def get_embeddings(texts: list[str]) -> list[list[float]]:
     batch_size = 16
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
-        resp = client.embeddings.create(input=batch, model=EMBEDDING_DEPLOYMENT)
-        all_embeddings.extend([d.embedding for d in resp.data])
+        all_embeddings.extend(_embed_batch(client, batch))
         if i + batch_size < len(texts):
             time.sleep(0.5)  # レート制限対策
     return all_embeddings
@@ -275,25 +414,35 @@ def upsert_chunks(
     chunks: list[str],
     embeddings: list[list[float]],
 ):
-    """チャンクを pgvector に upsert（DELETE + INSERT）"""
+    """チャンクを pgvector に upsert — トランザクション保証 (F-25)
+
+    クラッシュ時は rollback → 旧チャンクが残る（データ消失なし）。
+    """
     conn = get_conn()
     try:
+        conn.autocommit = False
         cur = conn.cursor()
-        # 既存チャンクを削除
-        cur.execute("DELETE FROM chunks WHERE file_id = %s", (file_id,))
+        try:
+            # 既存チャンクを削除
+            cur.execute("DELETE FROM chunks WHERE file_id = %s", (file_id,))
 
-        for i, (chunk, emb) in enumerate(zip(chunks, embeddings)):
-            chunk_id = hashlib.sha256(f"{file_id}:{i}".encode()).hexdigest()[:16]
-            cur.execute(
-                """INSERT INTO chunks
-                   (chunk_id, file_id, chunk_text, embedding, title, source_url, category, allowed_groups)
-                   VALUES (%s, %s, %s, %s::vector, %s, %s, %s, %s)""",
-                (chunk_id, file_id, chunk, emb, title, source_url, category, allowed_groups),
-            )
+            for i, (chunk, emb) in enumerate(zip(chunks, embeddings)):
+                chunk_id = hashlib.sha256(f"{file_id}:{i}".encode()).hexdigest()[:16]
+                cur.execute(
+                    """INSERT INTO chunks
+                       (chunk_id, file_id, chunk_text, embedding, title, source_url, category, allowed_groups)
+                       VALUES (%s, %s, %s, %s::vector, %s, %s, %s, %s)""",
+                    (chunk_id, file_id, chunk, emb, title, source_url, category, allowed_groups),
+                )
 
-        conn.commit()
-        cur.close()
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
     finally:
+        conn.autocommit = True
         put_conn(conn)
 
 
@@ -343,12 +492,47 @@ def _update_acl_only(file_id: str, allowed_groups: list[str]):
 
 # ── メインパイプライン ─────────────────────────────────
 
+_INGEST_LOCK_ID = 839201764  # アドバイザリーロック用の固有 ID
+
+
 def run(incremental: bool = False):
     """インジェストパイプライン実行
 
     incremental=False: 全件再処理
     incremental=True:  差分更新（変更・追加・削除を検知）
+
+    排他制御 (F-26): PostgreSQL アドバイザリーロックで二重実行を防止。
     """
+    # ── 排他制御: アドバイザリーロック取得 ──
+    lock_conn = get_conn()
+    try:
+        lock_cur = lock_conn.cursor()
+        lock_cur.execute("SELECT pg_try_advisory_lock(%s)", (_INGEST_LOCK_ID,))
+        acquired = lock_cur.fetchone()[0]
+        lock_cur.close()
+        if not acquired:
+            log.warning("Another ingest process is running. Skipping.")
+            put_conn(lock_conn)
+            return
+    except Exception:
+        put_conn(lock_conn)
+        raise
+
+    try:
+        _run_ingest(lock_conn, incremental)
+    finally:
+        # ロック解放
+        try:
+            unlock_cur = lock_conn.cursor()
+            unlock_cur.execute("SELECT pg_advisory_unlock(%s)", (_INGEST_LOCK_ID,))
+            unlock_cur.close()
+        except Exception:
+            log.exception("Failed to release advisory lock")
+        put_conn(lock_conn)
+
+
+def _run_ingest(lock_conn, incremental: bool):
+    """インジェスト本体（ロック取得後に実行）"""
     log.info("=== インジェスト開始 (incremental=%s) ===", incremental)
     token = get_graph_token()
     files = list_sp_files(token)
@@ -399,9 +583,9 @@ def run(incremental: bool = False):
         allowed_groups = get_folder_permissions(token, path)
         log.info("  ACL: %s", allowed_groups)
 
-        # チャンキング
-        chunks = chunk_text(text)
-        log.info("  チャンク数: %d", len(chunks))
+        # セマンティックチャンキング
+        chunks = semantic_chunk_text(text)
+        log.info("  チャンク数: %d (semantic)", len(chunks))
 
         if not chunks:
             skipped += 1

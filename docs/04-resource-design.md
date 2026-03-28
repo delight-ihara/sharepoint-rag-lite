@@ -29,20 +29,20 @@
 
 | # | サービス | CAF 略称 | リソース名 | 備考 |
 |---|---------|---------|-----------|------|
-| 0 | Resource Group | `rg` | `rg-spraglite-poc-jpe` | — |
-| 1 | Entra ID アプリ | — | 既存 `app-sprag-poc` を流用 | 新規作成不要 |
-| 2 | Azure OpenAI | `oai` | 既存 `oai-sprag-poc-eastus2` を流用 | GPT-4o-mini + embedding-small を追加デプロイ |
-| 3 | Key Vault | `kv` | `kv-spraglite-poc-jpe` | シークレット 3 件 |
-| 4 | Container Apps Environment | `cae` | `cae-spraglite-poc-jpe` | Consumption プラン |
-| 5 | Container App | `ca` | `ca-spraglite-poc-jpe` | FastAPI アプリ |
-| 7 | Application Insights | `appi` | `appi-spraglite-poc-jpe` | 監視・テレメトリ |
+| 0 | Resource Group | `rg` | `<YOUR_RESOURCE_GROUP>` | — |
+| 1 | Entra ID アプリ | — | 既存 `<YOUR_ENTRA_APP>` を流用 | 新規作成不要 |
+| 2 | Azure OpenAI | `oai` | 既存 `<YOUR_OPENAI_RESOURCE>` を流用 | GPT-4o-mini + embedding-small を追加デプロイ |
+| 3 | Key Vault | `kv` | `<YOUR_KEY_VAULT>` | シークレット 3 件 |
+| 4 | Container Apps Environment | `cae` | `<YOUR_CONTAINER_ENV>` | Consumption プラン |
+| 5 | Container App | `ca` | `<YOUR_CONTAINER_APP>` | FastAPI アプリ |
+| 7 | Application Insights | `appi` | `<YOUR_APP_INSIGHTS>` | 監視・テレメトリ |
 
 **Azure 外リソース（PoC）**:
 
 | # | サービス | 名称 | 備考 |
 |---|---------|------|------|
-| 6 | `spraglite-poc`（Supabase） | PostgreSQL + pgvector | Free | 500MB / ap-northeast-1 | ベクトル DB + 会話履歴 + クエリログ + GraphRAG | — |
-| 7 | `appi-spraglite-poc-jpe` | Application Insights | — | Japan East / OpenTelemetry SDK | 監視・アラート | #4 |
+| 6 | `<YOUR_SUPABASE_PROJECT>`（Supabase） | PostgreSQL + pgvector | Free | 500MB / ap-northeast-1 | ベクトル DB + 会話履歴 + クエリログ + GraphRAG | — |
+| 7 | `<YOUR_APP_INSIGHTS>` | Application Insights | — | Japan East / OpenTelemetry SDK | 監視・アラート | #4 |
 
 ### タギング戦略
 
@@ -62,13 +62,13 @@
 
 | # | リソース名 | サービス | SKU | 設定値 | 用途 | 依存先 |
 |---|-----------|---------|-----|--------|------|--------|
-| 0 | `rg-spraglite-poc-jpe` | Resource Group | — | Japan East | 全���ソースの入れ物 | — |
-| 1 | `app-sprag-poc`（流用） | Entra ID アプリ登録 | — | Sites.Read.All, Files.Read.All | Graph API 認証 | — |
-| 2 | `oai-sprag-poc-eastus2`（流用） | Azure OpenAI | S0 | GPT-4o-mini: 30K TPM / text-embedding-3-small: 120K TPM / East US 2 | 回答生成 + 埋め込み | — |
-| 3 | `kv-spraglite-poc-jpe` | Key Vault | Standard | RBAC / シークレット 3 件 | シークレット管理 | — |
-| 4 | `cae-spraglite-poc-jpe` | Container Apps Env | Consumption | Japan East | Container Apps 実行環境 | — |
-| 5 | `ca-spraglite-poc-jpe` | Container App | Consumption | Python 3.12 / min=0 max=1 / Entra ID EasyAuth | API + チャット UI | #3, #4 |
-| 6 | `spraglite-poc`（Supabase） | PostgreSQL + pgvector | Free | 500MB / ap-northeast-1 | ベク���ル DB + 会話履歴 + クエリログ | — |
+| 0 | `<YOUR_RESOURCE_GROUP>` | Resource Group | — | Japan East | 全���ソースの入れ物 | — |
+| 1 | `<YOUR_ENTRA_APP>`（流用） | Entra ID アプリ登録 | — | Sites.Read.All, Files.Read.All | Graph API 認証 | — |
+| 2 | `<YOUR_OPENAI_RESOURCE>`（流用） | Azure OpenAI | S0 | GPT-4o-mini: 30K TPM / text-embedding-3-small: 120K TPM / East US 2 | 回答生成 + 埋め込み | — |
+| 3 | `<YOUR_KEY_VAULT>` | Key Vault | Standard | RBAC / シークレット 3 件 | シークレット管理 | — |
+| 4 | `<YOUR_CONTAINER_ENV>` | Container Apps Env | Consumption | Japan East | Container Apps 実行環境 | — |
+| 5 | `<YOUR_CONTAINER_APP>` | Container App | Consumption | Python 3.12 / min=0 max=1 / Entra ID EasyAuth | API + チャット UI | #3, #4 |
+| 6 | `<YOUR_SUPABASE_PROJECT>`（Supabase） | PostgreSQL + pgvector | Free | 500MB / ap-northeast-1 | ベク���ル DB + 会話履歴 + クエリログ | — |
 
 ### 既存構成との比較
 
