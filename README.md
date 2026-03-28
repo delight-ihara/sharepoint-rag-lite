@@ -11,221 +11,224 @@ Azure AI Search を使わず、pgvector + FastAPI で構築。月額 ¥100〜600
 
 ---
 
-## Architecture
+## リポジトリ構成
+
+```
+sharepoint-rag-lite/
+│
+├── .github/workflows/       CI/CD パイプライン（GitHub Actions）
+│   ├── ci.yml                 PR 時: lint + pytest 自動実行
+│   └── deploy.yml             main push 時: Docker ビルド → ACR → Container Apps 自動デプロイ
+│
+├── docs/                    設計書一式（エンタープライズ品質）
+│   ├── 01-requirements.md     要件定義書（機能32件 + 非機能9件 + リスク分析）
+│   ├── 02-architecture.md     アーキテクチャ設計書（DB設計・ストリーミング・GraphRAG・監視）
+│   ├── 03-security.md         セキュリティ設計書（STRIDE脅威モデル・ACL・プロンプトインジェクション防御）
+│   ├── 04-resource-design.md  リソース設計書（Azure CAF命名・コスト試算・RBAC）
+│   ├── 10-build-guide.md      構築ガイド（Supabase → Azure → デプロイの10ステップ）
+│   └── 11-test-spec.md        テスト仕様書（20分類・100ケース）
+│
+├── src/                     アプリケーションコード
+│   ├── api.py                 FastAPI エントリポイント（チャット・ストリーミング・フィードバック・管理API）
+│   ├── search.py              ハイブリッド検索 + ACL フィルタリング
+│   ├── llm.py                 回答生成 + クエリリライト + ストリーミング
+│   ├── ingest.py              SharePoint → pgvector（セマンティックチャンキング）
+│   ├── graph_rag.py           エンティティ/関係抽出（GraphRAG パイプライン）
+│   ├── config.py              環境変数管理 + Key Vault 連携
+│   ├── db.py                  PostgreSQL 接続プール管理
+│   └── static/index.html      チャット UI（ビルド不要の単一HTML）
+│
+├── scripts/                 運用スクリプト
+│   ├── evaluate.py            RAG 精度評価パイプライン（LLM-as-Judge 方式）
+│   └── cleanup.py             90日超データの自動削除
+│
+├── tests/                   テストコード
+│   ├── test_api.py            pytest ユニットテスト（62ケース）
+│   └── conftest.py            テストフィクスチャ（ダミー環境変数 + TestClient）
+│
+├── .dockerignore              Docker ビルド除外設定
+├── .gitignore                 Git 追跡除外設定（.env*, __pycache__ 等）
+├── Dockerfile                 コンテナイメージ定義（non-root 実行・HEALTHCHECK 付き）
+├── requirements.txt           Python 依存パッケージ一覧
+└── run_tests.py               統合テスト実行スクリプト（ACL シナリオ + DB 直接検証）
+```
+
+---
+
+## アーキテクチャ
 
 ```mermaid
 graph TB
     subgraph Client
-        Browser[Browser / Chat UI]
+        Browser["ブラウザ / チャット UI"]
     end
 
     subgraph Azure["Azure Cloud"]
-        EasyAuth[Entra ID SSO<br/>EasyAuth]
-        CA[Container Apps<br/>FastAPI + Chat UI]
-        KV[Key Vault<br/>Secrets]
-        OAI[Azure OpenAI<br/>GPT-4o-mini<br/>text-embedding-3-small]
-        AppInsights[Application Insights<br/>OpenTelemetry]
+        EasyAuth["Entra ID SSO<br/>（EasyAuth）"]
+        CA["Container Apps<br/>FastAPI + Chat UI"]
+        KV["Key Vault<br/>シークレット管理"]
+        OAI["Azure OpenAI<br/>GPT-4o-mini<br/>text-embedding-3-small"]
+        AppInsights["Application Insights<br/>OpenTelemetry"]
     end
 
-    subgraph External
-        SP[SharePoint Online<br/>276 files / ACL]
-        Supabase[(Supabase<br/>PostgreSQL + pgvector<br/>3,388 chunks)]
+    subgraph External["外部サービス"]
+        SP["SharePoint Online<br/>276ファイル / ACL"]
+        Supabase[("Supabase<br/>PostgreSQL + pgvector<br/>3,388チャンク")]
     end
 
     Browser -->|HTTPS| EasyAuth
-    EasyAuth -->|x-ms-client-principal| CA
-    CA -->|Query + ACL filter| Supabase
-    CA -->|Chat Completion<br/>Embedding| OAI
-    CA -->|Secrets| KV
-    CA -->|Telemetry| AppInsights
-    SP -->|Graph API<br/>Incremental Sync| CA
+    EasyAuth -->|"x-ms-client-principal<br/>（認証済みユーザー情報）"| CA
+    CA -->|"クエリ + ACL フィルタ"| Supabase
+    CA -->|"回答生成 / 埋め込み"| OAI
+    CA -->|シークレット取得| KV
+    CA -->|テレメトリ送信| AppInsights
+    SP -->|"Graph API<br/>差分同期"| CA
 
     style CA fill:#339af0,color:#fff
     style Supabase fill:#3ecf8e,color:#fff
     style OAI fill:#10a37f,color:#fff
 ```
 
-### Data Flow
+### データフロー（チャット時）
 
 ```mermaid
 sequenceDiagram
-    participant U as User
+    participant U as ユーザー
     participant A as FastAPI
     participant DB as pgvector
     participant LLM as Azure OpenAI
 
-    U->>A: POST /v1/chat/stream (SSE)
-    A->>A: Query Rewrite (with conversation history)
-    A->>DB: Hybrid Search + ACL Filter
-    DB-->>A: Relevant Chunks
-    A->>LLM: Generate Answer (streaming)
-    LLM-->>A: Token chunks
-    A-->>U: SSE stream + Citations
-    A->>DB: Save conversation + query log
+    U->>A: POST /v1/chat/stream（質問送信）
+    A->>A: クエリリライト（会話履歴を考慮）
+    A->>DB: ハイブリッド検索 + ACL フィルタ
+    DB-->>A: 関連チャンク
+    A->>LLM: 回答生成（ストリーミング）
+    LLM-->>A: トークン単位で逐次返却
+    A-->>U: SSE ストリーム + 引用情報
+    A->>DB: 会話履歴 + クエリログ保存
 ```
 
 ---
 
-## Key Results
+## 実績
 
-| Metric | Target | Actual |
-|--------|--------|--------|
-| Search Accuracy | 70%+ | **100%** (10/10) |
-| ACL Leakage | 0 | **0** |
-| Monthly Cost | < ¥5,000 | **¥100-600** (99% reduction) |
-| Response Time (P95) | < 8s | **5.7s** |
-| Test Cases | — | **62 passed** (100 spec'd) |
+| 指標 | 目標 | 実績 |
+|------|------|------|
+| 検索精度 | 70%以上 | **100%**（10/10） |
+| ACL 漏洩 | 0件 | **0件** |
+| 月額コスト | ¥5,000以下 | **¥100-600**（99%削減） |
+| 応答時間（P95） | 8秒以内 | **5.7秒** |
+| テストケース | — | **62件パス**（仕様書は100件定義） |
 
-**Cost Breakdown** (PoC / 10 users):
+### コスト内訳（PoC / 10ユーザー）
 
-| Resource | Monthly |
-|----------|---------|
-| Azure OpenAI (GPT-4o-mini + embedding) | ~¥60 |
-| Container Apps (Consumption, scale-to-zero) | ~¥0-450 |
-| Supabase (Free tier, pgvector) | ¥0 |
-| Key Vault + App Insights | ~¥2 |
-| **Total** | **~¥75-525** |
-
----
-
-## Features
-
-### Core
-- **ACL-aware search** — SharePoint permissions synced via Graph API; unauthorized documents never appear in results
-- **Semantic chunking** — Embedding-based topic detection splits documents at natural boundaries (3,388 chunks from 276 files)
-- **SSE streaming** — Real-time token-by-token response with cursor animation
-- **Query rewrite** — Conversation-aware query reformulation for multi-turn accuracy
-- **Citation links** — Inline reference numbers `[1]` with clickable source cards
-
-### Chat UI (ChatGPT-style)
-- Sidebar with conversation history (Today / Yesterday / Last 7 days)
-- New chat / delete conversation
-- Feedback buttons (thumbs up/down → stored for analysis)
-- Markdown rendering (bold, lists, paragraphs)
-- Mobile responsive (sidebar auto-hide on < 768px)
-
-### Security & Operations
-- **Entra ID SSO** via EasyAuth (zero-code authentication)
-- **Key Vault** integration for all secrets
-- **Rate limiting** (10 req/min per user via slowapi)
-- **Prompt injection defense** (system prompt guardrails)
-- **Application Insights** (OpenTelemetry auto-instrumentation)
-- **CI/CD** (GitHub Actions → ACR → Container Apps)
-- **Data retention** (90-day auto-cleanup)
-
-### Advanced
-- **GraphRAG** — Entity/relation extraction pipeline for cross-document reasoning
-- **Token budget management** — Automatic conversation truncation for long sessions
-- **Admin stats API** — 30-day usage metrics, feedback aggregation, index status
+| リソース | 月額 |
+|----------|------|
+| Azure OpenAI（GPT-4o-mini + embedding） | ~¥60 |
+| Container Apps（Consumption / スケールゼロ） | ~¥0-450 |
+| Supabase（Free tier / pgvector） | ¥0 |
+| Key Vault + Application Insights | ~¥2 |
+| **合計** | **~¥75-525** |
 
 ---
 
-## Tech Stack
+## 機能一覧
 
-| Layer | Technology |
-|-------|-----------|
-| Language | Python 3.12 |
-| API Framework | FastAPI + Uvicorn |
-| Vector DB | PostgreSQL + pgvector (Supabase) |
-| LLM | Azure OpenAI (GPT-4o-mini) |
-| Embedding | text-embedding-3-small (1536 dim) |
-| Hosting | Azure Container Apps (Consumption) |
-| Auth | Entra ID SSO (EasyAuth) |
-| Secrets | Azure Key Vault |
-| Monitoring | Application Insights (OpenTelemetry) |
+### コア機能
+- **ACL 連動検索** — SharePoint の権限を Graph API で同期し、権限のない文書は検索結果に一切出さない
+- **セマンティックチャンキング** — 埋め込みベースの話題検出で文書を意味単位に分割（276ファイル → 3,388チャンク）
+- **SSE ストリーミング** — トークン単位のリアルタイム表示（カーソル点滅アニメーション付き）
+- **クエリリライト** — 会話履歴を考慮した検索クエリの自動再構成（マルチターン精度向上）
+- **根拠リンク** — インライン引用番号 `[1]` + クリック可能な出典カード
+
+### チャット UI（ChatGPT 風）
+- 会話履歴サイドバー（Today / Yesterday / Last 7 days で自動分類）
+- 新規チャット作成 / 会話削除
+- フィードバックボタン（👍👎 → DB に記録して分析可能）
+- Markdown レンダリング（太字・リスト・段落）
+- モバイル対応（768px 未満でサイドバー自動非表示）
+
+### セキュリティ・運用
+- **Entra ID SSO** — EasyAuth によるゼロコード認証
+- **Key Vault 統合** — 全シークレットを Key Vault で一元管理
+- **レート制限** — slowapi で 10リクエスト/分/ユーザー
+- **プロンプトインジェクション防御** — システムプロンプトによるガードレール
+- **Application Insights** — OpenTelemetry による自動計装・監視
+- **CI/CD** — GitHub Actions → ACR → Container Apps の自動デプロイ
+- **データ保持ポリシー** — 90日超のログ・会話を自動削除
+
+### 発展機能
+- **GraphRAG** — エンティティ/関係抽出パイプラインによる文書横断推論
+- **トークン予算管理** — 長時間会話での自動トランケーション
+- **管理者統計 API** — 30日間の利用状況・フィードバック集計・インデックス状態
+
+---
+
+## 技術スタック
+
+| レイヤー | 技術 |
+|---------|------|
+| 言語 | Python 3.12 |
+| API フレームワーク | FastAPI + Uvicorn |
+| ベクトル DB | PostgreSQL + pgvector（Supabase） |
+| LLM | Azure OpenAI（GPT-4o-mini） |
+| 埋め込みモデル | text-embedding-3-small（1536次元） |
+| ホスティング | Azure Container Apps（Consumption） |
+| 認証 | Entra ID SSO（EasyAuth） |
+| シークレット管理 | Azure Key Vault |
+| 監視 | Application Insights（OpenTelemetry） |
 | CI/CD | GitHub Actions |
-| Graph API | Microsoft Graph (SharePoint + ACL) |
-| Testing | pytest (62 cases) |
+| データ連携 | Microsoft Graph API（SharePoint + ACL） |
+| テスト | pytest（62ケース） |
 
 ---
 
-## Documentation
+## セットアップ
 
-Full enterprise-grade documentation set:
-
-| Document | Description |
-|----------|-------------|
-| [Requirements](docs/01-requirements.md) | 32 functional + 9 non-functional requirements, risk analysis |
-| [Architecture](docs/02-architecture.md) | Component design, DB schema, streaming, GraphRAG, monitoring |
-| [Security](docs/03-security.md) | STRIDE threat model, ACL design, prompt injection defense |
-| [Resource Design](docs/04-resource-design.md) | Azure CAF naming, cost estimation, RBAC matrix |
-| [Build Guide](docs/10-build-guide.md) | Step-by-step: Supabase → Azure → Deploy (10 steps) |
-| [Test Spec](docs/11-test-spec.md) | 100 test cases across 20 categories (A-T) |
-
----
-
-## Project Structure
-
-```
-sharepoint-rag-lite/
-├── src/
-│   ├── api.py              # FastAPI endpoints (chat, stream, feedback, admin)
-│   ├── search.py            # Hybrid search + ACL filtering
-│   ├── llm.py               # Answer generation + query rewrite + streaming
-│   ├── ingest.py            # SharePoint → pgvector (semantic chunking)
-│   ├── graph_rag.py         # Entity/relation extraction (GraphRAG)
-│   ├── config.py            # Environment config + Key Vault integration
-│   ├── db.py                # Connection pool management
-│   └── static/index.html    # Chat UI (single-file, no build step)
-├── scripts/
-│   ├── evaluate.py          # RAG evaluation pipeline (LLM-as-Judge)
-│   └── cleanup.py           # 90-day data retention cleanup
-├── tests/
-│   ├── test_api.py          # 62 pytest cases
-│   └── conftest.py          # Test fixtures
-├── docs/                    # 6 design documents (see above)
-├── .github/workflows/       # CI (lint + test) / CD (build + deploy)
-├── Dockerfile               # Multi-stage, non-root, HEALTHCHECK
-└── requirements.txt
-```
-
----
-
-## Quick Start
-
-### Prerequisites
+### 前提条件
 - Python 3.12+
-- Supabase account (Free tier)
-- Azure subscription (OpenAI, Container Apps, Key Vault)
-- Entra ID app registration (Graph API: Sites.Read.All, Files.Read.All)
+- Supabase アカウント（Free tier）
+- Azure サブスクリプション（OpenAI / Container Apps / Key Vault）
+- Entra ID アプリ登録（Graph API: Sites.Read.All, Files.Read.All）
 
-### Setup
+### ローカル起動
 
 ```bash
-# Install dependencies
+# 依存パッケージインストール
 pip install -r requirements.txt
 
-# Configure environment (copy and edit)
+# 環境変数を設定
 cp .env.example .env.local
+# .env.local を編集して接続情報を記入
 
-# Ingest SharePoint documents
+# SharePoint 文書をインジェスト
 python -m src.ingest
 
-# Run locally
+# API 起動
 uvicorn src.api:app --host 0.0.0.0 --port 8000
 ```
 
-### Test
+### テスト
 
 ```bash
-# Unit tests
+# ユニットテスト
 python -m pytest tests/ -v
 
-# Integration tests (requires DB connection)
+# 統合テスト（DB 接続が必要）
 export TEST_BOSS_EMAIL="boss@example.com"
 export TEST_MEMBER_EMAIL="member@example.com"
 export TEST_SALES_EMAIL="sales@example.com"
 python run_tests.py
 ```
 
-### Deploy
+### デプロイ
 
 ```bash
-# Build and push to ACR
+# ACR にイメージをビルド・プッシュ
 az acr build --registry <YOUR_ACR_NAME> \
   --image sharepoint-rag-lite:latest --file Dockerfile .
 
-# Update Container App
+# Container App を更新
 az containerapp update \
   --name <YOUR_CONTAINER_APP> \
   --resource-group <YOUR_RESOURCE_GROUP> \
@@ -234,20 +237,20 @@ az containerapp update \
 
 ---
 
-## Comparison with AI Search Architecture
+## AI Search 構成との比較
 
-| | AI Search (azure) | pgvector (lite) |
+| | AI Search 構成（azure） | pgvector 構成（lite） |
 |---|---|---|
-| Monthly cost | ~¥13,000 | ~¥100-600 |
-| Azure resources | 12 | 7 |
-| Fixed cost | ¥12,750 (AI Search + App Service) | ¥0 (all consumption) |
-| Setup time | ~90 min | ~40 min |
-| Search engine | Azure AI Search (managed) | pgvector (self-managed SQL) |
-| ACL | Same | Same |
-| Accuracy | Same | Same |
+| 月額コスト | ~¥13,000 | ~¥100-600 |
+| Azure リソース数 | 12 | 7 |
+| 固定費 | ¥12,750（AI Search + App Service） | ¥0（全て従量課金） |
+| 構築時間 | 約90分 | 約40分 |
+| 検索エンジン | Azure AI Search（マネージド） | pgvector（SQL ベース） |
+| ACL 精度 | 同等 | 同等 |
+| 検索精度 | 同等 | 同等 |
 
 ---
 
-## License
+## ライセンス
 
 MIT
