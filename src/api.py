@@ -521,6 +521,24 @@ async def chat_legacy(request: Request, body: ChatRequest):
 
 # ── バージョン非依存エンドポイント ──
 
+@app.get("/debug/me")
+async def debug_me(request: Request):
+    """デバッグ: EasyAuth ヘッダーとACL解決結果を返す（本番前に削除）"""
+    email = request.headers.get("x-ms-client-principal-name", "NOT_SET")
+    principal_id = request.headers.get("x-ms-client-principal-id", "NOT_SET")
+    try:
+        from .acl import resolve_user_groups
+        groups = resolve_user_groups(email.lower()) if email != "NOT_SET" else []
+    except Exception as e:
+        groups = [f"ERROR: {e}"]
+    return {
+        "email": email,
+        "principal_id": principal_id,
+        "groups": groups,
+        "group_count": len(groups),
+    }
+
+
 @app.get("/health")
 async def health():
     """ヘルスチェック（DB 接続確認付き）"""
