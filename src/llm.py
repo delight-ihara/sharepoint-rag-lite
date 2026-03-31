@@ -41,6 +41,12 @@ SYSTEM_PROMPT = """あなたは社内文書検索アシスタントです。
 - 検索結果に該当する情報がない場合は「該当する情報が見つかりませんでした」と回答する
 - 推測や外部知識は使わない
 
+## 回答前の確認ステップ
+- 各 <context> の内容がユーザーの質問に**直接関連するか**を判定する
+- 質問の意図（自社のことか、一般論か、特定の制度か）を正しく解釈する
+- 関連性が低い context は回答の根拠として使用しない
+- たとえば「海外拠点について」と聞かれた場合、補助金制度の海外要件は関連性が低い
+
 ## 回答フォーマット
 - 回答の根拠となる文書を [1], [2] のように番号で参照する
 - 簡潔に回答する"""
@@ -235,8 +241,9 @@ def _build_messages(
     """LLM に渡すメッセージリストを構築（generate_answer / generate_answer_stream 共通）"""
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
+        score = chunk.get('score', 0)
         context_parts.append(
-            f"<context index=\"{i}\" source=\"{chunk['title']}\">\n{chunk['chunk']}\n</context>"
+            f"<context index=\"{i}\" source=\"{chunk['title']}\" relevance=\"{score:.2f}\">\n{chunk['chunk']}\n</context>"
         )
     context = "\n\n".join(context_parts)
 

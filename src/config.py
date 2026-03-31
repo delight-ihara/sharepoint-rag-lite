@@ -65,7 +65,7 @@ SP_DRIVE_ID = os.environ["SP_DRIVE_ID"]
 
 # Search settings
 MAX_SEARCH_RESULTS = int(os.environ.get("MAX_SEARCH_RESULTS", "7"))
-SIMILARITY_THRESHOLD = float(os.environ.get("SIMILARITY_THRESHOLD", "0.3"))
+SIMILARITY_THRESHOLD = float(os.environ.get("SIMILARITY_THRESHOLD", "0.35"))
 ACL_ENABLED = os.environ.get("ACL_ENABLED", "true").lower() == "true"
 
 # Target folders (empty = all, CSV = filter by prefix)

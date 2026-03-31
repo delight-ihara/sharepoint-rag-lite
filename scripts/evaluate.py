@@ -74,12 +74,39 @@ EVAL_QUESTIONS = [
         "expected_source": "02_人事労務",
         "expected_keywords": ["社宅"],
     },
+    # 精度問題ケース: 曖昧クエリ / 無関係文書の除外
+    {
+        "query": "海外拠点について教えて",
+        "expected_source": "01_経営",
+        "expected_keywords": ["海外"],
+        "negative_keywords": ["補助金", "助成金", "公募", "直接投資", "応募申請"],
+    },
+    {
+        "query": "有給休暇は何日もらえますか？",
+        "expected_source": "02_人事労務",
+        "expected_keywords": ["有給", "休暇", "日"],
+    },
+    {
+        "query": "育児休業の取得条件は？",
+        "expected_source": "02_人事労務",
+        "expected_keywords": ["育児", "休業"],
+    },
+    {
+        "query": "在宅勤務のルールは？",
+        "expected_source": "02_人事労務",
+        "expected_keywords": ["在宅", "勤務"],
+    },
+    {
+        "query": "退職する場合の手続きは？",
+        "expected_source": "02_人事労務",
+        "expected_keywords": ["退職"],
+    },
 ]
 
 NO_RESULT_MARKERS = ["該当する情報が見つかりませんでした", "見つかりませんでした"]
 
 
-def evaluate(api_url: str, user_email: str = "boss@example.com"):
+def evaluate(api_url: str, user_email: str = "eval-bot@test.local"):
     """評価パイプライン実行"""
     results = []
     response_times = []
@@ -113,7 +140,15 @@ def evaluate(api_url: str, user_email: str = "boss@example.com"):
             # Answer Relevancy: キーワードが回答に含まれるか（簡易判定）
             relevant = not is_no_result and any(kw in answer for kw in q["expected_keywords"])
 
+            # Negative keywords: 無関係な文書からの回答を検出
+            neg_keywords = q.get("negative_keywords", [])
+            has_negative = any(nk in answer for nk in neg_keywords) if neg_keywords else False
+            if has_negative:
+                relevant = False
+
             status = "OK" if retrieval_ok and relevant else "WEAK" if retrieval_ok else "MISS"
+            if has_negative:
+                status = "NEG"
             log.info("  [%s] %s → %s", status, q["query"][:30], answer[:60])
 
             results.append({
