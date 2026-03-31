@@ -11,6 +11,7 @@ import sys
 import time
 from urllib.parse import quote
 
+import chardet
 import fitz  # PyMuPDF
 import requests
 from docx import Document as DocxDocument
@@ -25,16 +26,14 @@ from tenacity import (
     wait_exponential,
 )
 
+from .acl import check_graph_permissions, get_app_token, resolve_folder_acl
 from .config import (
     AZURE_OPENAI_ENDPOINT,
     AZURE_OPENAI_KEY,
     EMBEDDING_DEPLOYMENT,
     GRAPH_BASE,
-    GRAPH_CLIENT_ID,
-    GRAPH_CLIENT_SECRET,
-    GRAPH_TENANT_ID,
+    MAX_FILE_SIZE_MB,
     SP_DRIVE_ID,
-    SP_SITE_ID,
     TARGET_FOLDERS,
 )
 from .db import get_conn, put_conn
@@ -61,118 +60,55 @@ def _is_transient_http_error(exc: BaseException) -> bool:
     return False
 
 
-# ── Graph API 認証 ──────────────────────────────────────
-
-@retry(
-    retry=retry_if_exception(_is_transient_http_error),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    stop=stop_after_attempt(3),
-    before_sleep=before_sleep_log(log, logging.WARNING),
-    reraise=True,
-)
-def get_graph_token() -> str:
-    """クライアントシークレットで Graph API トークンを取得"""
-    url = f"https://login.microsoftonline.com/{GRAPH_TENANT_ID}/oauth2/v2.0/token"
-    resp = requests.post(url, data={
-        "client_id": GRAPH_CLIENT_ID,
-        "client_secret": GRAPH_CLIENT_SECRET,
-        "scope": "https://graph.microsoft.com/.default",
-        "grant_type": "client_credentials",
-    }, timeout=30)
-    resp.raise_for_status()
-    return resp.json()["access_token"]
+# get_app_token() は src/acl.py に移動済み
 
 
-# ── SP 権限取得（既存 sp_to_blob.py から流用） ──────────────
-
-_perm_cache: dict[str, list[str]] = {}
-
-
-def get_folder_permissions(token: str, folder_path: str) -> list[str]:
-    """
-    フォルダの権限を取得し、閲覧可能なユーザーの UPN リストを返す。
-    継承権限（明示的権限なし）の場合は ["*"] を返す。
-    """
-    top_folder = folder_path.split("/")[0] if folder_path else ""
-    if not top_folder:
-        return ["*"]
-
-    if top_folder in _perm_cache:
-        return _perm_cache[top_folder]
-
-    headers = {"Authorization": f"Bearer {token}"}
-    url = f"{GRAPH_BASE}/drives/{SP_DRIVE_ID}/root:/{quote(top_folder)}:/permissions"
-
-    resp = requests.get(url, headers=headers, timeout=30)
-    if resp.status_code == 404:
-        log.warning("権限取得失敗 (404): %s — 継承権限と判断", top_folder)
-        _perm_cache[top_folder] = ["*"]
-        return ["*"]
-    resp.raise_for_status()
-
-    allowed_users: list[str] = []
-    for perm in resp.json().get("value", []):
-        granted = perm.get("grantedToV2") or perm.get("grantedTo") or {}
-        user = granted.get("user") or granted.get("siteUser") or {}
-        if user.get("email"):
-            allowed_users.append(user["email"].lower())
-        elif user.get("loginName"):
-            allowed_users.append(user["loginName"].lower())
-
-        group = granted.get("group") or granted.get("siteGroup") or {}
-        if group.get("email"):
-            allowed_users.append(group["email"].lower())
-
-        for identity in perm.get("grantedToIdentitiesV2", perm.get("grantedToIdentities", [])):
-            u = identity.get("user", {})
-            if u.get("email"):
-                allowed_users.append(u["email"].lower())
-
-    if not allowed_users:
-        log.info("  フォルダ '%s' の明示的権限なし → 継承（全員アクセス可）", top_folder)
-        _perm_cache[top_folder] = ["*"]
-        return ["*"]
-
-    result = list(set(allowed_users))
-    _perm_cache[top_folder] = result
-    return result
+# resolve_folder_acl() は src/acl.py に移動済み
 
 
 # ── SP ファイル取得 ─────────────────────────────────────
 
 def list_sp_files(token: str) -> list[dict]:
-    """SharePoint ドキュメントライブラリの全ファイルを再帰取得"""
+    """SharePoint ドキュメントライブラリの全ファイルを再帰取得（ページネーション対応）"""
     headers = {"Authorization": f"Bearer {token}"}
     files = []
+    max_size = MAX_FILE_SIZE_MB * 1024 * 1024
 
     def walk(path: str = ""):
         if path:
-            url = f"{GRAPH_BASE}/drives/{SP_DRIVE_ID}/root:/{quote(path)}:/children"
+            url: str | None = f"{GRAPH_BASE}/drives/{SP_DRIVE_ID}/root:/{quote(path)}:/children?$top=200"
         else:
-            url = f"{GRAPH_BASE}/drives/{SP_DRIVE_ID}/root/children"
+            url = f"{GRAPH_BASE}/drives/{SP_DRIVE_ID}/root/children?$top=200"
 
-        resp = requests.get(url, headers=headers, timeout=30)
-        resp.raise_for_status()
+        while url:
+            resp = requests.get(url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
 
-        for item in resp.json().get("value", []):
-            if item.get("folder"):
-                child_path = f"{path}/{item['name']}" if path else item["name"]
-                # TARGET_FOLDERS が指定されている場合、ルートレベルでフィルタ
-                if not path and TARGET_FOLDERS:
-                    if not any(child_path.startswith(prefix) for prefix in TARGET_FOLDERS):
+            for item in data.get("value", []):
+                if item.get("folder"):
+                    child_path = f"{path}/{item['name']}" if path else item["name"]
+                    if not path and TARGET_FOLDERS:
+                        if not any(child_path.startswith(prefix) for prefix in TARGET_FOLDERS):
+                            continue
+                    walk(child_path)
+                elif item.get("file"):
+                    size = item.get("size", 0)
+                    if size > max_size:
+                        log.warning("  ファイルサイズ超過 (%dMB > %dMB): %s", size // (1024*1024), MAX_FILE_SIZE_MB, item["name"])
                         continue
-                walk(child_path)
-            elif item.get("file"):
-                files.append({
-                    "id": item["id"],
-                    "name": item["name"],
-                    "path": path,
-                    "size": item.get("size", 0),
-                    "mimeType": item["file"].get("mimeType", ""),
-                    "lastModified": item.get("lastModifiedDateTime", ""),
-                    "webUrl": item.get("webUrl", ""),
-                    "@microsoft.graph.downloadUrl": item.get("@microsoft.graph.downloadUrl", ""),
-                })
+                    files.append({
+                        "id": item["id"],
+                        "name": item["name"],
+                        "path": path,
+                        "size": size,
+                        "mimeType": item["file"].get("mimeType", ""),
+                        "lastModified": item.get("lastModifiedDateTime", ""),
+                        "webUrl": item.get("webUrl", ""),
+                        "@microsoft.graph.downloadUrl": item.get("@microsoft.graph.downloadUrl", ""),
+                    })
+
+            url = data.get("@odata.nextLink")
 
     walk()
     return files
@@ -208,35 +144,306 @@ def extract_text(content: bytes, filename: str) -> str:
     try:
         if ext == "pdf":
             return _extract_pdf(content)
-        elif ext in ("docx",):
+        elif ext == "docx":
             return _extract_docx(content)
-        elif ext in ("xlsx",):
+        elif ext == "xlsx":
             return _extract_xlsx(content)
-        elif ext in ("pptx",):
+        elif ext == "pptx":
             return _extract_pptx(content)
-        elif ext in ("txt", "csv", "md"):
-            return content.decode("utf-8", errors="replace")
-        elif ext == "doc":
-            log.warning("  .doc 形式は未対応: %s", filename)
-            return ""
+        elif ext in ("txt", "csv", "md", "json", "xml", "html", "htm"):
+            return _decode_text(content, filename)
+        elif ext == "xls":
+            return _extract_xls(content)
+        elif ext in ("doc", "ppt"):
+            return _extract_legacy_office(content, filename, ext)
         else:
-            log.warning("  未対応形式: %s", filename)
+            log.warning("  未対応形式 (.%s): %s", ext, filename)
             return ""
     except Exception as e:
-        log.warning("  テキスト抽出エラー: %s — %s", filename, e)
+        err_str = str(e).lower()
+        if any(kw in err_str for kw in ("password", "encrypt", "protected", "decrypt")):
+            log.warning("  パスワード保護ファイル — テキスト抽出不可: %s", filename)
+        else:
+            log.warning("  テキスト抽出エラー: %s — %s", filename, e)
         return ""
+
+
+def _extract_xls(content: bytes) -> str:
+    """旧 .xls 形式を xlrd でテキスト抽出（クロスプラットフォーム）"""
+    try:
+        import xlrd
+        wb = xlrd.open_workbook(file_contents=content)
+        texts = []
+        for sheet in wb.sheets():
+            texts.append(f"=== {sheet.name} ===")
+            for row_idx in range(sheet.nrows):
+                vals = [str(sheet.cell_value(row_idx, col)) for col in range(sheet.ncols)]
+                if any(v.strip() for v in vals):
+                    texts.append("\t".join(vals))
+        return "\n".join(texts)
+    except ImportError:
+        log.warning("  xlrd 未インストール — .xls テキスト抽出不可")
+        return _extract_legacy_office(content, "file.xls", "xls")
+    except Exception as e:
+        log.warning("  .xls 抽出エラー: %s — フォールバック試行", e)
+        return _extract_legacy_office(content, "file.xls", "xls")
+
+
+def _extract_legacy_office(content: bytes, filename: str, ext: str) -> str:
+    """旧Office形式 (.doc/.xls/.ppt) の汎用テキスト抽出
+
+    1. win32com (Windows) — Word/Excel/PowerPoint COM
+    2. LibreOffice headless (Linux/Docker) — soffice --convert-to txt
+    """
+    import tempfile
+    import os
+
+    # === 1. win32com (Windows) ===
+    tmp_path = None
+    try:
+        import win32com.client
+        import pythoncom
+
+        pythoncom.CoInitialize()
+
+        with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as f:
+            f.write(content)
+            tmp_path = f.name
+
+        app_map = {
+            "doc": ("Word.Application", "Documents", lambda app, path: _com_extract_word(app, path)),
+            "xls": ("Excel.Application", "Workbooks", lambda app, path: _com_extract_excel(app, path)),
+            "ppt": ("PowerPoint.Application", "Presentations", lambda app, path: _com_extract_ppt(app, path)),
+        }
+
+        if ext not in app_map:
+            return ""
+
+        app_name, _, extractor = app_map[ext]
+        app = win32com.client.Dispatch(app_name)
+        app.Visible = False
+        try:
+            return extractor(app, tmp_path)
+        finally:
+            app.Quit()
+            pythoncom.CoUninitialize()
+
+    except ImportError:
+        # win32com なし → LibreOffice フォールバック
+        pass
+    except Exception as e:
+        log.warning("  COM抽出エラー (.%s): %s — LibreOffice フォールバック試行", ext, e)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    # === 2. LibreOffice headless (Linux/Docker) ===
+    return _extract_with_libreoffice(content, filename, ext)
+
+
+def _com_extract_word(app, path: str) -> str:
+    doc = app.Documents.Open(path, ReadOnly=True)
+    text = doc.Content.Text
+    doc.Close(False)
+    return text
+
+
+def _com_extract_excel(app, path: str) -> str:
+    wb = app.Workbooks.Open(path, ReadOnly=True)
+    texts = []
+    for ws in wb.Worksheets:
+        texts.append(f"=== {ws.Name} ===")
+        used = ws.UsedRange
+        if used:
+            for row in used.Rows:
+                vals = [str(cell.Value) if cell.Value is not None else "" for cell in row.Cells]
+                if any(v.strip() for v in vals):
+                    texts.append("\t".join(vals))
+    wb.Close(False)
+    return "\n".join(texts)
+
+
+def _com_extract_ppt(app, path: str) -> str:
+    prs = app.Presentations.Open(path, ReadOnly=True, WithWindow=False)
+    texts = []
+    for slide in prs.Slides:
+        for shape in slide.Shapes:
+            if shape.HasTextFrame:
+                texts.append(shape.TextFrame.TextRange.Text)
+    prs.Close()
+    return "\n".join(texts)
+
+
+def _extract_with_libreoffice(content: bytes, filename: str, ext: str) -> str:
+    """LibreOffice headless でテキスト変換（Linux/Docker 用）"""
+    import tempfile
+    import os
+    import subprocess
+    import shutil
+
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        log.warning("  win32com も LibreOffice も利用不可 — .%s テキスト抽出不可: %s", ext, filename)
+        return ""
+
+    tmp_dir = tempfile.mkdtemp()
+    tmp_path = os.path.join(tmp_dir, f"input.{ext}")
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+
+        result = subprocess.run(
+            [soffice, "--headless", "--convert-to", "txt:Text", "--outdir", tmp_dir, tmp_path],
+            capture_output=True, timeout=60,
+        )
+        txt_path = os.path.join(tmp_dir, "input.txt")
+        if os.path.exists(txt_path):
+            with open(txt_path, "r", encoding="utf-8", errors="replace") as f:
+                return f.read()
+
+        log.warning("  LibreOffice 変換失敗: %s (rc=%d)", filename, result.returncode)
+        return ""
+    except Exception as e:
+        log.warning("  LibreOffice 抽出エラー: %s — %s", filename, e)
+        return ""
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _decode_text(content: bytes, filename: str) -> str:
+    """テキストファイルのエンコーディングを自動検出してデコード"""
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        detected = chardet.detect(content)
+        encoding = detected.get("encoding") or "utf-8"
+        log.info("  エンコーディング自動検出: %s → %s (confidence=%.0f%%)",
+                 filename, encoding, (detected.get("confidence") or 0) * 100)
+        return content.decode(encoding, errors="replace")
+
+
+def _clean_pdf_text(text: str) -> str:
+    """PDF 抽出テキストからノイズを除去
+
+    - ドットリーダー行（目次の「第1条 目的 . . . . . . 3」等）を除去
+    - 連続ドットを圧縮
+    - 意味のある文字がほぼ無い行を除去
+    """
+    lines = text.split("\n")
+    cleaned = []
+    for line in lines:
+        # ドットリーダー行の検出: ドットが5個以上連続（間にスペース可）
+        stripped = line.strip()
+        if re.search(r'(?:\.\s*){5,}', stripped):
+            # 意味のある文字（ドット・スペース・数字以外）が残るか確認
+            meaningful = re.sub(r'[\.\s\d\u3000]+', '', stripped)
+            if len(meaningful) < 3:
+                # ほぼドットのみ → 完全除去
+                continue
+            else:
+                # 目次行: ドットリーダー部分だけ除去して見出しテキストを保持
+                cleaned_line = re.sub(r'\s*(?:\.\s*){3,}\s*\d*\s*$', '', stripped)
+                cleaned_line = cleaned_line.rstrip('. \t')
+                if cleaned_line.strip():
+                    cleaned.append(cleaned_line.strip())
+                continue
+        # 行がドットとスペースだけ → 除去
+        if stripped and not re.sub(r'[\.\s\d\u3000]+', '', stripped):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned)
 
 
 def _extract_pdf(content: bytes) -> str:
     doc = fitz.open(stream=content, filetype="pdf")
+    if doc.is_encrypted:
+        log.warning("  パスワード保護PDF — テキスト抽出不可")
+        doc.close()
+        return ""
     texts = [page.get_text() for page in doc]
     doc.close()
-    return "\n".join(texts)
+    raw = "\n".join(texts)
+    cleaned = _clean_pdf_text(raw)
+
+    # テキストが空 or 極めて少ない → 画像PDF の可能性 → OCR フォールバック
+    if len(cleaned.strip()) < 50:
+        ocr_text = _ocr_pdf(content)
+        if ocr_text and len(ocr_text.strip()) > len(cleaned.strip()):
+            log.info("  OCR フォールバック使用（画像PDF）")
+            return ocr_text
+
+    return cleaned
+
+
+def _ocr_pdf(content: bytes) -> str:
+    """Tesseract OCR で画像 PDF からテキスト抽出"""
+    import os
+    try:
+        import pytesseract
+        from PIL import Image
+    except ImportError:
+        log.warning("  pytesseract/Pillow 未インストール — OCR 不可")
+        return ""
+
+    # Tesseract パス設定（Windows）
+    tesseract_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    if os.path.exists(tesseract_path):
+        pytesseract.pytesseract.tesseract_cmd = tesseract_path
+
+    # TESSDATA_PREFIX が未設定ならユーザーディレクトリを試行
+    if not os.environ.get("TESSDATA_PREFIX"):
+        fallback = os.path.expanduser("~/tessdata")
+        if os.path.isdir(fallback):
+            os.environ["TESSDATA_PREFIX"] = fallback
+
+    try:
+        doc = fitz.open(stream=content, filetype="pdf")
+        texts = []
+        for page in doc:
+            # ページを画像に変換（300 DPI）
+            mat = fitz.Matrix(300 / 72, 300 / 72)
+            pix = page.get_pixmap(matrix=mat)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+            text = pytesseract.image_to_string(img, lang="jpn+eng")
+            texts.append(text)
+        doc.close()
+        return "\n".join(texts)
+    except Exception as e:
+        log.warning("  OCR 失敗: %s", e)
+        return ""
 
 
 def _extract_docx(content: bytes) -> str:
-    doc = DocxDocument(io.BytesIO(content))
-    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    try:
+        doc = DocxDocument(io.BytesIO(content))
+        return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    except KeyError:
+        # comments.xml 等が欠損した壊れた docx → zipfile + XML で直接抽出
+        return _extract_docx_raw(content)
+
+
+def _extract_docx_raw(content: bytes) -> str:
+    """壊れた .docx から zipfile + XML で本文を直接抽出"""
+    import zipfile
+    from xml.etree import ElementTree
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as z:
+            if "word/document.xml" not in z.namelist():
+                return ""
+            xml_content = z.read("word/document.xml")
+            tree = ElementTree.fromstring(xml_content)
+            ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+            paragraphs = []
+            for p in tree.iter(f"{{{ns['w']}}}p"):
+                texts = [t.text for t in p.iter(f"{{{ns['w']}}}t") if t.text]
+                if texts:
+                    paragraphs.append("".join(texts))
+            return "\n".join(paragraphs)
+    except Exception as e:
+        log.warning("  docx raw抽出も失敗: %s", e)
+        return ""
 
 
 def _extract_xlsx(content: bytes) -> str:
@@ -420,6 +627,9 @@ def upsert_chunks(
     """
     conn = get_conn()
     try:
+        # プール返却時にトランザクション中の場合があるためリセット
+        if conn.info.transaction_status != 0:  # IDLE 以外
+            conn.rollback()
         conn.autocommit = False
         cur = conn.cursor()
         try:
@@ -521,20 +731,48 @@ def run(incremental: bool = False):
     try:
         _run_ingest(lock_conn, incremental)
     finally:
-        # ロック解放
+        # ロック解放 — 元の接続が切れている可能性があるため新規接続でも試行
+        released = False
+        for conn_attempt in [lock_conn, None]:
+            try:
+                c = conn_attempt if conn_attempt else get_conn()
+                cur = c.cursor()
+                cur.execute("SELECT pg_advisory_unlock(%s)", (_INGEST_LOCK_ID,))
+                cur.close()
+                if not conn_attempt:
+                    put_conn(c)
+                released = True
+                break
+            except Exception:
+                if not conn_attempt:
+                    log.exception("Failed to release advisory lock (retry also failed)")
+                continue
+        if not released:
+            log.error("Advisory lock %s could not be released — manual cleanup required", _INGEST_LOCK_ID)
         try:
-            unlock_cur = lock_conn.cursor()
-            unlock_cur.execute("SELECT pg_advisory_unlock(%s)", (_INGEST_LOCK_ID,))
-            unlock_cur.close()
+            put_conn(lock_conn)
         except Exception:
-            log.exception("Failed to release advisory lock")
-        put_conn(lock_conn)
+            pass
 
 
 def _run_ingest(lock_conn, incremental: bool):
     """インジェスト本体（ロック取得後に実行）"""
     log.info("=== インジェスト開始 (incremental=%s) ===", incremental)
-    token = get_graph_token()
+    token = get_app_token()
+    _token_acquired_at = time.time()
+
+    def _refresh_token_if_needed() -> str:
+        """50分経過でトークンを自動更新（有効期限60分のマージン）"""
+        nonlocal token, _token_acquired_at
+        if time.time() - _token_acquired_at > 3000:  # 50分
+            log.info("トークン更新（50分経過）")
+            token = get_app_token()
+            _token_acquired_at = time.time()
+        return token
+
+    # 権限チェック preflight — ACL 展開に必要な権限があるか確認
+    check_graph_permissions(token)
+
     files = list_sp_files(token)
     log.info("SP ファイル数: %d", len(files))
 
@@ -547,8 +785,10 @@ def _run_ingest(lock_conn, incremental: bool):
     skipped = 0
     acl_updated = 0
     deleted = 0
+    skip_reasons: list[tuple[str, str]] = []  # (filename, reason)
 
     for f in files:
+        token = _refresh_token_if_needed()
         title = f["name"]
         path = f["path"]
         category = path.split("/")[0] if path else "root"
@@ -559,7 +799,7 @@ def _run_ingest(lock_conn, incremental: bool):
         # 差分チェック: incremental モードでは変更がないファイルをスキップ
         if incremental and file_id in indexed:
             # ACL だけ更新チェック
-            current_acl = get_folder_permissions(token, path)
+            current_acl = resolve_folder_acl(token, path)
             _update_acl_only(file_id, current_acl)
             acl_updated += 1
 
@@ -576,15 +816,27 @@ def _run_ingest(lock_conn, incremental: bool):
         text = extract_text(content, title)
         if not text.strip():
             log.warning("  テキスト抽出結果が空: %s", title)
+            ext = title.rsplit(".", 1)[-1].lower() if "." in title else ""
+            if ext in ("doc", "xls", "ppt"):
+                skip_reasons.append((title, f"旧Office形式 (.{ext})"))
+            elif ext == "pdf":
+                skip_reasons.append((title, "テキスト抽出不可（画像のみPDF/パスワード保護の可能性）"))
+            else:
+                skip_reasons.append((title, "テキスト空"))
             skipped += 1
             continue
 
         # ACL 取得
-        allowed_groups = get_folder_permissions(token, path)
+        allowed_groups = resolve_folder_acl(token, path)
         log.info("  ACL: %s", allowed_groups)
 
         # セマンティックチャンキング
         chunks = semantic_chunk_text(text)
+        # チャンク品質フィルタ: 意味のある文字が少なすぎるチャンクを除外
+        before_filter = len(chunks)
+        chunks = [c for c in chunks if len(re.sub(r'[\.\s\d\u3000]+', '', c)) >= 10]
+        if before_filter != len(chunks):
+            log.info("  品質フィルタ: %d → %d チャンク", before_filter, len(chunks))
         log.info("  チャンク数: %d (semantic)", len(chunks))
 
         if not chunks:
@@ -606,10 +858,35 @@ def _run_ingest(lock_conn, incremental: bool):
                 log.info("削除: file_id=%s (%d chunks)", old_id, count)
                 deleted += count
 
+    # フルインジェスト時: TARGET_FOLDERS に含まれないカテゴリのチャンクを削除
+    if not incremental and TARGET_FOLDERS:
+        conn = get_conn()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT category FROM chunks")
+            all_cats = [row[0] for row in cur.fetchall()]
+            for cat in all_cats:
+                if not any(cat.startswith(prefix) for prefix in TARGET_FOLDERS):
+                    cur.execute("DELETE FROM chunks WHERE category = %s", (cat,))
+                    orphan_count = cur.rowcount
+                    if orphan_count:
+                        log.info("対象外カテゴリ削除: %s (%d chunks)", cat, orphan_count)
+                        deleted += orphan_count
+            conn.commit()
+            cur.close()
+        finally:
+            put_conn(conn)
+
     log.info(
         "=== インジェスト完了: %d 処理, %d スキップ, %d ACL更新, %d チャンク削除 ===",
         processed, skipped, acl_updated, deleted,
     )
+
+    # スキップレポート
+    if skip_reasons:
+        log.info("=== スキップレポート (%d 件) ===", len(skip_reasons))
+        for fname, reason in skip_reasons:
+            log.info("  %s: %s", fname, reason)
 
 
 if __name__ == "__main__":

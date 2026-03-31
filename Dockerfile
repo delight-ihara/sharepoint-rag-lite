@@ -2,6 +2,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# システム依存: Tesseract OCR + 日本語データ + LibreOffice（旧Office形式用）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tesseract-ocr tesseract-ocr-jpn \
+    libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress \
+    && rm -rf /var/lib/apt/lists/*
+
 # 依存関係のインストール（キャッシュ活用のため先にコピー）
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

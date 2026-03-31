@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SharePoint RAG Lite</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #09090b;
+  --surface: rgba(255,255,255,0.04);
+  --surface-2: rgba(255,255,255,0.06);
+  --surface-hover: rgba(255,255,255,0.10);
+  --border: rgba(255,255,255,0.07);
+  --border-focus: rgba(139,92,246,0.5);
+  --text: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-muted: #52525b;
+  --accent: #8b5cf6;
+  --accent-light: #a78bfa;
+  --accent-glow: rgba(139,92,246,0.12);
+  --accent-glow-strong: rgba(139,92,246,0.25);
+  --success: #22c55e;
+  --user-bg: rgba(139,92,246,0.08);
+  --user-border: rgba(139,92,246,0.15);
+  --radius: 16px;
+  --radius-sm: 10px;
+  --shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Sans', 'Noto Sans JP', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Header ── */
+.header {
+  padding: 0 20px;
+  height: 56px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(9,9,11,0.85);
+  backdrop-filter: blur(24px) saturate(1.2);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.header-logo {
+  width: 34px; height: 34px;
+  background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+  border-radius: 10px;
+  display: grid; place-items: center;
+  font-size: 16px;
+  box-shadow: 0 2px 8px rgba(139,92,246,0.3);
+}
+
+.header-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.header-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 4px 10px;
+  background: var(--surface);
+  border-radius: 6px;
+}
+
+.header-status .dot {
+  width: 6px; height: 6px;
+  background: var(--success);
+  border-radius: 50%;
+  box-shadow: 0 0 6px rgba(34,197,94,0.5);
+}
+
+.btn-icon {
+  width: 34px; height: 34px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: grid; place-items: center;
+  transition: all 0.15s;
+  font-size: 15px;
+}
+
+.btn-icon:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  border-color: rgba(255,255,255,0.12);
+}
+
+/* ── Messages ── */
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  scroll-behavior: smooth;
+}
+
+.messages::-webkit-scrollbar { width: 4px; }
+.messages::-webkit-scrollbar-track { background: transparent; }
+.messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* Message */
+.msg {
+  max-width: 740px;
+  width: 100%;
+  margin: 0 auto;
+  display: flex;
+  gap: 14px;
+  animation: msgIn 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.msg-avatar {
+  width: 30px; height: 30px;
+  border-radius: 9px;
+  display: grid; place-items: center;
+  font-size: 13px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.msg-user .msg-avatar {
+  background: var(--user-bg);
+  border: 1px solid var(--user-border);
+  color: var(--accent-light);
+}
+
+.msg-ai .msg-avatar {
+  background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+  box-shadow: 0 2px 8px rgba(139,92,246,0.25);
+}
+
+.msg-body { flex: 1; min-width: 0; }
+
+.msg-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.msg-content {
+  font-size: 14.5px;
+  line-height: 1.75;
+  color: var(--text);
+}
+
+/* User message bubble */
+.msg-user .msg-content {
+  background: var(--user-bg);
+  border: 1px solid var(--user-border);
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  border-top-left-radius: 4px;
+  display: inline-block;
+}
+
+/* AI markdown-like content */
+.msg-ai .msg-content p { margin-bottom: 8px; }
+.msg-ai .msg-content p:last-child { margin-bottom: 0; }
+
+.msg-ai .msg-content ul,
+.msg-ai .msg-content ol {
+  padding-left: 20px;
+  margin: 8px 0;
+}
+
+.msg-ai .msg-content li {
+  margin-bottom: 4px;
+  line-height: 1.7;
+}
+
+.msg-ai .msg-content strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+.msg-ai .msg-content .ref {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px; height: 18px;
+  background: var(--accent-glow);
+  border: 1px solid rgba(139,92,246,0.2);
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent-light);
+  vertical-align: middle;
+  margin: 0 1px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.msg-ai .msg-content .ref:hover {
+  background: var(--accent-glow-strong);
+  border-color: rgba(139,92,246,0.4);
+}
+
+/* Citations */
+.citations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.citation {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 7px 12px;
+  border-radius: 9px;
+  text-decoration: none;
+  transition: all 0.15s;
+  max-width: 280px;
+}
+
+.citation:hover {
+  background: var(--surface-hover);
+  border-color: rgba(255,255,255,0.12);
+  color: var(--text);
+}
+
+.citation-num {
+  width: 20px; height: 20px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 6px;
+  display: grid; place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.citation-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.citation-icon {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.4;
+}
+
+/* Message actions */
+.msg-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 10px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.msg:hover .msg-actions { opacity: 1; }
+
+.msg-action-btn {
+  width: 30px; height: 30px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: grid; place-items: center;
+  font-size: 14px;
+  transition: all 0.15s;
+}
+
+.msg-action-btn:hover {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
+
+.msg-action-btn.active {
+  color: var(--accent-light);
+}
+
+/* ── Welcome ── */
+.welcome {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.welcome-logo {
+  width: 72px; height: 72px;
+  background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+  border-radius: 22px;
+  display: grid; place-items: center;
+  font-size: 32px;
+  box-shadow: 0 12px 40px rgba(139,92,246,0.25);
+}
+
+.welcome h2 {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  background: linear-gradient(to right, #fafafa, #a1a1aa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.welcome p {
+  font-size: 14px;
+  color: var(--text-muted);
+  max-width: 400px;
+  line-height: 1.7;
+}
+
+.suggestions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 8px;
+  width: 100%;
+  max-width: 640px;
+  margin-top: 4px;
+}
+
+.suggestion {
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.suggestion:hover {
+  background: var(--surface-hover);
+  border-color: rgba(255,255,255,0.12);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+
+.suggestion-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+/* ── Input ── */
+.input-area {
+  padding: 12px 20px 20px;
+  background: rgba(9,9,11,0.9);
+  backdrop-filter: blur(24px);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.input-wrap {
+  max-width: 740px;
+  margin: 0 auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: flex-end;
+  padding: 6px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.input-wrap:focus-within {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.input-box {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 10px 14px;
+  color: var(--text);
+  font-size: 14.5px;
+  font-family: inherit;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+  min-height: 24px;
+  max-height: 140px;
+}
+
+.input-box::placeholder { color: var(--text-muted); }
+
+.input-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 4px 0;
+}
+
+.send-btn {
+  width: 36px; height: 36px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: #fff;
+  cursor: pointer;
+  display: grid; place-items: center;
+  transition: all 0.15s;
+}
+
+.send-btn:hover { background: #7c3aed; transform: scale(1.04); }
+.send-btn:active { transform: scale(0.97); }
+.send-btn:disabled { opacity: 0.3; cursor: not-allowed; transform: none; }
+.send-btn svg { width: 16px; height: 16px; }
+
+/* ── Streaming cursor ── */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.cursor {
+  display: inline-block;
+  width: 2px;
+  height: 16px;
+  background: var(--accent-light);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: blink 0.8s ease infinite;
+}
+
+/* ── Loading ── */
+.loading-dots {
+  display: inline-flex;
+  gap: 5px;
+  padding: 6px 0;
+}
+
+.loading-dots span {
+  width: 6px; height: 6px;
+  background: var(--text-muted);
+  border-radius: 50%;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.loading-dots span:nth-child(2) { animation-delay: 0.16s; }
+.loading-dots span:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes pulse {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+/* ── Footer ── */
+.input-footer {
+  max-width: 740px;
+  margin: 6px auto 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* ── Mobile ── */
+@media (max-width: 640px) {
+  .header { padding: 0 14px; }
+  .header-status { display: none; }
+  .messages { padding: 16px 14px; gap: 20px; }
+  .input-area { padding: 10px 14px 14px; }
+  .suggestions { grid-template-columns: 1fr; }
+  .welcome-logo { width: 56px; height: 56px; border-radius: 16px; font-size: 24px; }
+  .welcome h2 { font-size: 20px; }
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-logo">&#9889;</div>
+  <div class="header-title">SharePoint RAG</div>
+  <div class="header-right">
+    <div class="header-status">
+      <span class="dot"></span>
+      <span>1,023 docs indexed</span>
+    </div>
+    <button class="btn-icon" title="New chat" onclick="resetChat()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- Messages -->
+<div class="messages" id="messages">
+  <div class="welcome" id="welcome">
+    <div class="welcome-logo">&#128269;</div>
+    <h2>社内文書に何でも聞いてください</h2>
+    <p>SharePoint 上の文書から AI が根拠付きで回答します。権限のある文書のみが検索対象です。</p>
+    <div class="suggestions">
+      <div class="suggestion" onclick="ask(this.querySelector('.suggestion-text').textContent)">
+        <span class="suggestion-icon">&#128196;</span>
+        <span class="suggestion-text">情報セキュリティの基本方針は？</span>
+      </div>
+      <div class="suggestion" onclick="ask(this.querySelector('.suggestion-text').textContent)">
+        <span class="suggestion-icon">&#128188;</span>
+        <span class="suggestion-text">就業規則のポイントを教えて</span>
+      </div>
+      <div class="suggestion" onclick="ask(this.querySelector('.suggestion-text').textContent)">
+        <span class="suggestion-icon">&#128176;</span>
+        <span class="suggestion-text">補助金に関する規定は？</span>
+      </div>
+      <div class="suggestion" onclick="ask(this.querySelector('.suggestion-text').textContent)">
+        <span class="suggestion-icon">&#128100;</span>
+        <span class="suggestion-text">育児休業の取得方法は？</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Input -->
+<div class="input-area">
+  <div class="input-wrap">
+    <textarea class="input-box" id="input" placeholder="質問を入力..." rows="1"
+      onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send()}"
+      oninput="autoResize(this)"></textarea>
+    <div class="input-tools">
+      <button class="send-btn" id="sendBtn" onclick="send()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+  <div class="input-footer">Entra ID 認証済み &middot; 回答は AI 生成です。重要な判断には原典を確認してください。</div>
+</div>
+
+<script>
+const messagesEl = document.getElementById('messages');
+const inputEl = document.getElementById('input');
+const sendBtn = document.getElementById('sendBtn');
+let welcomeEl = document.getElementById('welcome');
+let sessionId = '';
+let isStreaming = false;
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+}
+
+function ask(text) {
+  inputEl.value = text;
+  send();
+}
+
+function resetChat() {
+  sessionId = '';
+  messagesEl.innerHTML = '';
+  // Re-add welcome
+  location.reload();
+}
+
+// Simple markdown: **bold**, - lists, [n] refs, paragraphs
+function renderMarkdown(text) {
+  // Escape HTML
+  let html = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // Bold
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Inline refs [1] [2]
+  html = html.replace(/\[(\d+)\]/g, '<span class="ref" title="出典 $1">$1</span>');
+  // Paragraphs
+  html = html.split('\n\n').map(block => {
+    block = block.trim();
+    if (!block) return '';
+    // Check if it's a list
+    const lines = block.split('\n');
+    const isList = lines.every(l => /^\s*[-]/.test(l));
+    if (isList) {
+      const items = lines.map(l => '<li>' + l.replace(/^\s*[-]\s*/, '') + '</li>').join('');
+      return '<ul>' + items + '</ul>';
+    }
+    return '<p>' + block.replace(/\n/g, '<br>') + '</p>';
+  }).join('');
+  return html;
+}
+
+function addMessage(role, content, citations) {
+  if (welcomeEl) { welcomeEl.remove(); welcomeEl = null; }
+
+  const msg = document.createElement('div');
+  msg.className = `msg msg-${role}`;
+
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.innerHTML = role === 'user' ? '&#128100;' : '&#9889;';
+
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+
+  const contentEl = document.createElement('div');
+  contentEl.className = 'msg-content';
+  if (role === 'ai') {
+    contentEl.innerHTML = renderMarkdown(content);
+  } else {
+    contentEl.textContent = content;
+  }
+  body.appendChild(contentEl);
+
+  // Citations
+  if (citations && citations.length > 0) {
+    const citEl = document.createElement('div');
+    citEl.className = 'citations';
+    citations.forEach(c => {
+      const a = document.createElement('a');
+      a.className = 'citation';
+      if (c.source_url && c.source_url.startsWith('https://')) {
+        a.href = c.source_url;
+      }
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+
+      const num = document.createElement('span');
+      num.className = 'citation-num';
+      num.textContent = c.index;
+      a.appendChild(num);
+
+      const title = document.createElement('span');
+      title.className = 'citation-title';
+      title.textContent = c.title || '';
+      a.appendChild(title);
+
+      const icon = document.createElement('span');
+      icon.className = 'citation-icon';
+      icon.innerHTML = '&#8599;';
+      a.appendChild(icon);
+
+      citEl.appendChild(a);
+    });
+    body.appendChild(citEl);
+  }
+
+  // Feedback buttons (AI only)
+  if (role === 'ai') {
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    ['&#128077;', '&#128078;'].forEach((emoji, i) => {
+      const btn = document.createElement('button');
+      btn.className = 'msg-action-btn';
+      btn.innerHTML = emoji;
+      btn.onclick = () => {
+        btn.classList.toggle('active');
+        // TODO: POST /v1/feedback
+      };
+      actions.appendChild(btn);
+    });
+    body.appendChild(actions);
+  }
+
+  msg.appendChild(avatar);
+  msg.appendChild(body);
+  messagesEl.appendChild(msg);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return { msg, contentEl };
+}
+
+function addLoading() {
+  if (welcomeEl) { welcomeEl.remove(); welcomeEl = null; }
+  const msg = document.createElement('div');
+  msg.className = 'msg msg-ai';
+  msg.id = 'loading';
+  msg.innerHTML = `
+    <div class="msg-avatar">&#9889;</div>
+    <div class="msg-body">
+      <div class="loading-dots"><span></span><span></span><span></span></div>
+    </div>`;
+  messagesEl.appendChild(msg);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function removeLoading() {
+  const el = document.getElementById('loading');
+  if (el) el.remove();
+}
+
+async function send() {
+  const text = inputEl.value.trim();
+  if (!text || isStreaming) return;
+
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+  sendBtn.disabled = true;
+  isStreaming = true;
+
+  addMessage('user', text);
+  addLoading();
+
+  try {
+    // Use streaming endpoint
+    const res = await fetch('/v1/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, session_id: sessionId }),
+    });
+
+    removeLoading();
+
+    // Create AI message with cursor
+    const { msg, contentEl } = addMessage('ai', '');
+    const cursor = document.createElement('span');
+    cursor.className = 'cursor';
+    contentEl.appendChild(cursor);
+
+    let fullText = '';
+    let citations = [];
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.type === 'chunk') {
+            fullText += data.content;
+            contentEl.innerHTML = renderMarkdown(fullText);
+            contentEl.appendChild(cursor);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+          } else if (data.type === 'done') {
+            citations = data.citations || [];
+            sessionId = data.session_id || sessionId;
+          }
+        } catch {}
+      }
+    }
+
+    // Remove cursor, finalize
+    cursor.remove();
+    contentEl.innerHTML = renderMarkdown(fullText);
+
+    // Add citations
+    if (citations.length > 0) {
+      const citEl = document.createElement('div');
+      citEl.className = 'citations';
+      citations.forEach(c => {
+        const a = document.createElement('a');
+        a.className = 'citation';
+        if (c.source_url && c.source_url.startsWith('https://')) a.href = c.source_url;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+
+        const num = document.createElement('span');
+        num.className = 'citation-num';
+        num.textContent = c.index;
+        a.appendChild(num);
+
+        const title = document.createElement('span');
+        title.className = 'citation-title';
+        title.textContent = c.title || '';
+        a.appendChild(title);
+
+        const icon = document.createElement('span');
+        icon.className = 'citation-icon';
+        icon.innerHTML = '&#8599;';
+        a.appendChild(icon);
+
+        citEl.appendChild(a);
+      });
+      msg.querySelector('.msg-body').insertBefore(citEl, msg.querySelector('.msg-actions'));
+    }
+
+    // Add feedback buttons
+    const actions = document.createElement('div');
+    actions.className = 'msg-actions';
+    ['&#128077;', '&#128078;'].forEach(emoji => {
+      const btn = document.createElement('button');
+      btn.className = 'msg-action-btn';
+      btn.innerHTML = emoji;
+      btn.onclick = () => btn.classList.toggle('active');
+      actions.appendChild(btn);
+    });
+    msg.querySelector('.msg-body').appendChild(actions);
+
+  } catch (e) {
+    removeLoading();
+    addMessage('ai', '接続エラーが発生しました。しばらくしてから再度お試しください。');
+  }
+
+  isStreaming = false;
+  sendBtn.disabled = false;
+  inputEl.focus();
+}
+
+inputEl.focus();
+</script>
+</body>
+</html>

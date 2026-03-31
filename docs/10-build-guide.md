@@ -302,6 +302,7 @@ export GRAPH_CLIENT_SECRET="<シークレット>"
 export GRAPH_TENANT_ID="<テナント ID>"
 export SP_SITE_ID="<SharePoint サイト ID>"
 export SP_DRIVE_ID="<ドキュメントライブラリ ID>"
+# export SP_SITE_MEMBERS="user1@example.com,user2@example.com"  # Sites.Read.All が付与できない場合のフォールバック
 
 # 全件インジェスト（セマンティックチャンキング適用）
 python -m src.ingest

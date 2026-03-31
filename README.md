@@ -115,10 +115,10 @@ sequenceDiagram
 | 指標 | 目標 | 実績 |
 |------|------|------|
 | 検索精度 | 70%以上 | **100%**（10/10） |
-| ACL 漏洩 | 0件 | **0件** |
+| ACL 漏洩 | 0件 | **要修正** — 監査で ACL 基盤の欠陥を検出（[詳細](docs/05-acl-remediation.md)） |
 | 月額コスト | ¥5,000以下 | **¥100-600**（99%削減） |
 | 応答時間（P95） | 8秒以内 | **5.7秒** |
-| テストケース | — | **62件パス**（仕様書は100件定義） |
+| テストケース | — | ユニット **62件パス** / 結合 **34件中4件NG**（ACL 修正中） |
 
 ### コスト内訳（PoC / 10ユーザー）
 
@@ -179,7 +179,7 @@ sequenceDiagram
 | 監視 | Application Insights（OpenTelemetry） |
 | CI/CD | GitHub Actions |
 | データ連携 | Microsoft Graph API（SharePoint + ACL） |
-| テスト | pytest（62ケース） |
+| テスト | pytest（ユニット62件） + run_tests.py（結合34件） |
 
 ---
 
@@ -189,7 +189,8 @@ sequenceDiagram
 - Python 3.12+
 - Supabase アカウント（Free tier）
 - Azure サブスクリプション（OpenAI / Container Apps / Key Vault）
-- Entra ID アプリ登録（Graph API: Sites.Read.All, Files.Read.All）
+- Entra ID アプリ登録（Graph API: Sites.Read.All, Files.Read.All, **GroupMember.Read.All, Directory.Read.All, User.Read.All**）
+  - `Sites.Read.All` は SP サイトメンバー展開にも使用。付与できない場合は `SP_SITE_MEMBERS` 環境変数でフォールバック可能
 
 ### ローカル起動
 
@@ -214,10 +215,11 @@ uvicorn src.api:app --host 0.0.0.0 --port 8000
 # ユニットテスト
 python -m pytest tests/ -v
 
-# 統合テスト（DB 接続が必要）
-export TEST_BOSS_EMAIL="boss@example.com"
-export TEST_MEMBER_EMAIL="member@example.com"
-export TEST_SALES_EMAIL="sales@example.com"
+# 統合テスト（DB 接続 + 実メールアドレスが必要）
+export TEST_BOSS_EMAIL="boss@example.com"             # 経営+人事+営業 全アクセス
+export TEST_MEMBER_EMAIL="member@example.com"         # 人事+営業 アクセス
+export TEST_SALES_EMAIL="sales@example.com"           # 営業のみ
+export TEST_GENERAL_EMAIL="nobody@example.com"        # アクセスなし
 python run_tests.py
 ```
 

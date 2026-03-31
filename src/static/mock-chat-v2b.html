@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SharePoint RAG Lite</title>
+<title>SharePoint RAG Lite — Pattern B</title>
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -103,7 +103,7 @@ body {
   color: var(--text);
 }
 
-/* ── Layout ── */
+/* ── Sidebar-like left strip ── */
 .layout {
   flex: 1;
   display: flex;
@@ -119,7 +119,6 @@ body {
   flex-direction: column;
   gap: 4px;
   flex-shrink: 0;
-  overflow-y: auto;
 }
 
 .sidebar-section {
@@ -149,21 +148,6 @@ body {
 .sidebar-item:hover { background: var(--surface-2); color: var(--text); }
 .sidebar-item.active { background: var(--accent-glow); color: var(--accent-dark); font-weight: 500; }
 .sidebar-item .icon { font-size: 15px; flex-shrink: 0; }
-.sidebar-item .item-title { flex: 1; overflow: hidden; text-overflow: ellipsis; }
-.sidebar-item .delete-btn {
-  display: none;
-  width: 24px; height: 24px;
-  background: none;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 13px;
-  flex-shrink: 0;
-  place-items: center;
-}
-.sidebar-item:hover .delete-btn { display: grid; }
-.sidebar-item .delete-btn:hover { background: #ffe3e3; border-color: #ffa8a8; color: #e03131; }
 
 .sidebar-spacer { flex: 1; }
 
@@ -512,59 +496,36 @@ body {
 @keyframes blink { 50% { opacity: 0; } }
 
 /* Mobile */
-.menu-btn { display: none; }
-
 @media (max-width: 768px) {
-  .menu-btn { display: grid; }
-  .sidebar {
-    position: fixed;
-    top: 56px;
-    left: 0;
-    bottom: 0;
-    z-index: 20;
-    transform: translateX(-100%);
-    transition: transform 0.25s ease;
-    box-shadow: none;
-  }
-  .sidebar.open {
-    transform: translateX(0);
-    box-shadow: 4px 0 20px rgba(0,0,0,0.1);
-  }
-  .sidebar-overlay {
-    display: none;
-    position: fixed;
-    top: 56px;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0,0,0,0.3);
-    z-index: 19;
-  }
-  .sidebar-overlay.open { display: block; }
+  .sidebar { display: none; }
 }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <button class="btn-icon menu-btn" title="Menu" onclick="toggleSidebar()">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
-  </button>
   <div class="header-logo">&#9889;</div>
   <div class="header-title">SharePoint RAG</div>
   <div class="header-right">
     <div class="header-badge">Lite v1</div>
-    <button class="btn-icon" title="New chat" onclick="newChat()">
+    <button class="btn-icon" title="New chat">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
     </button>
   </div>
 </div>
 
-<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
 <div class="layout">
   <!-- Sidebar -->
-  <div class="sidebar" id="sidebar">
-    <div id="sidebarContent"></div>
+  <div class="sidebar">
+    <div class="sidebar-section">Today</div>
+    <div class="sidebar-item active"><span class="icon">&#128172;</span> New chat</div>
+    <div class="sidebar-section">Yesterday</div>
+    <div class="sidebar-item"><span class="icon">&#128172;</span> 就業規則について</div>
+    <div class="sidebar-item"><span class="icon">&#128172;</span> 情報セキュリティ方針</div>
+    <div class="sidebar-item"><span class="icon">&#128172;</span> 育児休業の取得方法</div>
+    <div class="sidebar-section">Last 7 days</div>
+    <div class="sidebar-item"><span class="icon">&#128172;</span> 補助金規定</div>
+    <div class="sidebar-item"><span class="icon">&#128172;</span> 出張規程の確認</div>
     <div class="sidebar-spacer"></div>
     <div class="sidebar-footer">Powered by Azure OpenAI</div>
   </div>
@@ -600,380 +561,76 @@ body {
 </div>
 
 <script>
+// Minimal JS for demo — same logic as Pattern A
 const messagesEl = document.getElementById('messages');
 const inputEl = document.getElementById('input');
-const sendBtn = document.getElementById('sendBtn');
-const sidebarContent = document.getElementById('sidebarContent');
 let welcomeEl = document.getElementById('welcome');
 
-let sessionId = '';
-let currentMessageId = '';
-let isStreaming = false;
-
-// ── Sidebar: load conversation history ──
-
-async function loadConversations() {
-  try {
-    const res = await fetch('/v1/conversations');
-    if (!res.ok) return;
-    const convs = await res.json();
-    renderSidebar(convs);
-  } catch (e) {
-    // silently fail
-  }
-}
-
-function renderSidebar(convs) {
-  if (!convs.length) {
-    sidebarContent.innerHTML = '<div class="sidebar-section">No history</div>';
-    return;
-  }
-
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
-  const week = new Date(today); week.setDate(week.getDate() - 7);
-
-  const groups = { today: [], yesterday: [], week: [], older: [] };
-  convs.forEach(c => {
-    const d = new Date(c.created_at);
-    if (d >= today) groups.today.push(c);
-    else if (d >= yesterday) groups.yesterday.push(c);
-    else if (d >= week) groups.week.push(c);
-    else groups.older.push(c);
-  });
-
-  let html = '';
-  const renderGroup = (label, items) => {
-    if (!items.length) return '';
-    let h = `<div class="sidebar-section">${label}</div>`;
-    items.forEach(c => {
-      const active = c.session_id === sessionId ? ' active' : '';
-      const title = c.title || 'New chat';
-      const sid = c.session_id.replace(/'/g, "\\'");
-      h += `<div class="sidebar-item${active}" onclick="loadSession('${sid}')" title="${title}"><span class="icon">&#128172;</span><span class="item-title">${title}</span><button class="delete-btn" onclick="event.stopPropagation();deleteSession('${sid}')" title="削除">&#128465;</button></div>`;
-    });
-    return h;
-  };
-
-  html += renderGroup('Today', groups.today);
-  html += renderGroup('Yesterday', groups.yesterday);
-  html += renderGroup('Last 7 days', groups.week);
-  html += renderGroup('Older', groups.older);
-  sidebarContent.innerHTML = html;
-}
-
-async function loadSession(sid) {
-  closeSidebar();
-  sessionId = sid;
-  clearMessages();
-  try {
-    const res = await fetch(`/v1/conversations/${encodeURIComponent(sid)}/messages`);
-    if (!res.ok) return;
-    const msgs = await res.json();
-    msgs.forEach(m => {
-      addMsg(m.role === 'user' ? 'user' : 'ai', m.content, m.citations, m.id);
-    });
-  } catch (e) {
-    addMsg('ai', '会話の読み込みに失敗しました。');
-  }
-  loadConversations();
-}
-
-function newChat() {
-  closeSidebar();
-  sessionId = '';
-  currentMessageId = '';
-  clearMessages();
-  // Re-add welcome
-  const w = document.createElement('div');
-  w.className = 'welcome';
-  w.id = 'welcome';
-  w.innerHTML = `
-    <div class="welcome-logo">&#128269;</div>
-    <h2>社内文書に何でも聞いてください</h2>
-    <p>SharePoint 上の文書から AI が根拠付きで回答します。</p>
-    <div class="suggestions">
-      <div class="suggestion" onclick="ask('情報セキュリティの基本方針は？')">&#128196; 情報セキュリティの基本方針は？</div>
-      <div class="suggestion" onclick="ask('就業規則のポイントを教えて')">&#128188; 就業規則のポイントを教えて</div>
-      <div class="suggestion" onclick="ask('補助金に関する規定は？')">&#128176; 補助金に関する規定は？</div>
-      <div class="suggestion" onclick="ask('育児休業の取得方法は？')">&#128100; 育児休業の取得方法は？</div>
-    </div>`;
-  messagesEl.appendChild(w);
-  welcomeEl = w;
-  loadConversations();
-  inputEl.focus();
-}
-
-function clearMessages() {
-  messagesEl.innerHTML = '';
-  welcomeEl = null;
-}
-
-// ── Markdown rendering ──
+function ask(text) { inputEl.value = text; send(); }
 
 function renderMarkdown(text) {
-  let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  let html = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\[(\d+)\]/g, '<span class="ref">$1</span>');
   html = html.split('\n\n').map(b => {
-    b = b.trim();
-    if (!b) return '';
+    b = b.trim(); if (!b) return '';
     const lines = b.split('\n');
     if (lines.every(l => /^\s*[-]/.test(l)))
-      return '<ul>' + lines.map(l => '<li>' + l.replace(/^\s*[-]\s*/, '') + '</li>').join('') + '</ul>';
-    return '<p>' + b.replace(/\n/g, '<br>') + '</p>';
+      return '<ul>' + lines.map(l => '<li>' + l.replace(/^\s*[-]\s*/,'') + '</li>').join('') + '</ul>';
+    return '<p>' + b.replace(/\n/g,'<br>') + '</p>';
   }).join('');
   return html;
 }
 
-// ── Message rendering ──
-
-function addMsg(role, content, citations, messageId) {
+function addMsg(role, content, citations) {
   if (welcomeEl) { welcomeEl.remove(); welcomeEl = null; }
-
   const msg = document.createElement('div');
   msg.className = `msg msg-${role}`;
-
   const av = document.createElement('div');
   av.className = 'msg-avatar';
   av.innerHTML = role === 'user' ? '&#128100;' : '&#9889;';
-
   const body = document.createElement('div');
   body.className = 'msg-body';
-
   const c = document.createElement('div');
   c.className = 'msg-content';
-  if (role === 'ai') {
-    c.innerHTML = renderMarkdown(content);
-  } else {
-    c.textContent = content;
-  }
+  c.innerHTML = role === 'ai' ? renderMarkdown(content) : '';
+  if (role === 'user') c.textContent = content;
   body.appendChild(c);
-
   if (citations && citations.length) {
-    body.appendChild(renderCitations(citations));
+    const cit = document.createElement('div'); cit.className = 'citations';
+    citations.forEach(ci => {
+      const a = document.createElement('a'); a.className = 'citation';
+      if (ci.source_url) a.href = ci.source_url;
+      a.target = '_blank';
+      const n = document.createElement('span'); n.className = 'citation-num'; n.textContent = ci.index;
+      const t = document.createElement('span'); t.className = 'citation-title'; t.textContent = ci.title;
+      a.append(n, t); cit.appendChild(a);
+    });
+    body.appendChild(cit);
   }
-
-  if (role === 'ai' && messageId) {
-    body.appendChild(renderActions(messageId));
+  if (role === 'ai') {
+    const acts = document.createElement('div'); acts.className = 'msg-actions';
+    ['&#128077;','&#128078;'].forEach(e => {
+      const b = document.createElement('button'); b.className = 'msg-action-btn'; b.innerHTML = e;
+      b.onclick = () => b.classList.toggle('active');
+      acts.appendChild(b);
+    });
+    body.appendChild(acts);
   }
-
   msg.append(av, body);
   messagesEl.appendChild(msg);
   messagesEl.scrollTop = messagesEl.scrollHeight;
-  return { msg, contentEl: c, body };
 }
-
-function renderCitations(citations) {
-  const cit = document.createElement('div');
-  cit.className = 'citations';
-  citations.forEach(ci => {
-    const a = document.createElement('a');
-    a.className = 'citation';
-    if (ci.source_url && ci.source_url.startsWith('https://')) {
-      a.href = ci.source_url;
-    }
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    const n = document.createElement('span');
-    n.className = 'citation-num';
-    n.textContent = ci.index;
-    const t = document.createElement('span');
-    t.className = 'citation-title';
-    t.textContent = ci.title || '';
-    a.append(n, t);
-    cit.appendChild(a);
-  });
-  return cit;
-}
-
-function renderActions(messageId) {
-  const acts = document.createElement('div');
-  acts.className = 'msg-actions';
-
-  const thumbUp = document.createElement('button');
-  thumbUp.className = 'msg-action-btn';
-  thumbUp.innerHTML = '&#128077;';
-  thumbUp.onclick = () => sendFeedback(messageId, 1, thumbUp, thumbDown);
-
-  const thumbDown = document.createElement('button');
-  thumbDown.className = 'msg-action-btn';
-  thumbDown.innerHTML = '&#128078;';
-  thumbDown.onclick = () => sendFeedback(messageId, -1, thumbDown, thumbUp);
-
-  acts.append(thumbUp, thumbDown);
-  return acts;
-}
-
-async function sendFeedback(messageId, rating, activeBtn, otherBtn) {
-  activeBtn.classList.toggle('active');
-  otherBtn.classList.remove('active');
-  try {
-    await fetch('/v1/feedback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        session_id: sessionId,
-        message_id: messageId,
-        rating: activeBtn.classList.contains('active') ? rating : rating,
-      }),
-    });
-  } catch (e) {
-    // silently fail
-  }
-}
-
-// ── Loading indicator ──
-
-function addLoading() {
-  const msg = document.createElement('div');
-  msg.className = 'msg msg-ai';
-  msg.id = 'loading';
-  msg.innerHTML = `
-    <div class="msg-avatar">&#9889;</div>
-    <div class="msg-body">
-      <div class="loading-dots"><span></span><span></span><span></span></div>
-    </div>`;
-  messagesEl.appendChild(msg);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-}
-
-function removeLoading() {
-  const el = document.getElementById('loading');
-  if (el) el.remove();
-}
-
-// ── SSE Streaming ──
-
-function ask(text) { inputEl.value = text; send(); }
 
 async function send() {
   const text = inputEl.value.trim();
-  if (!text || isStreaming) return;
-
-  inputEl.value = '';
-  inputEl.style.height = 'auto';
-  sendBtn.disabled = true;
-  isStreaming = true;
-
+  if (!text) return;
+  inputEl.value = ''; inputEl.style.height = 'auto';
   addMsg('user', text);
-  addLoading();
-
-  try {
-    const res = await fetch('/v1/chat/stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, session_id: sessionId }),
-    });
-
-    if (!res.ok) {
-      removeLoading();
-      addMsg('ai', 'エラーが発生しました。しばらくしてから再度お試しください。');
-      isStreaming = false;
-      sendBtn.disabled = false;
-      return;
-    }
-
-    removeLoading();
-
-    // Create AI message container for streaming
-    const { contentEl, body } = addMsg('ai', '', null, null);
-    const cursorEl = document.createElement('span');
-    cursorEl.className = 'cursor';
-    contentEl.appendChild(cursorEl);
-
-    let fullText = '';
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const jsonStr = line.slice(6).trim();
-        if (!jsonStr) continue;
-
-        try {
-          const evt = JSON.parse(jsonStr);
-
-          if (evt.type === 'chunk') {
-            fullText += evt.content;
-            cursorEl.remove();
-            contentEl.innerHTML = renderMarkdown(fullText);
-            contentEl.appendChild(cursorEl);
-            messagesEl.scrollTop = messagesEl.scrollHeight;
-          } else if (evt.type === 'done') {
-            cursorEl.remove();
-            contentEl.innerHTML = renderMarkdown(fullText);
-            sessionId = evt.session_id || sessionId;
-            currentMessageId = evt.message_id || '';
-
-            if (evt.citations && evt.citations.length) {
-              body.appendChild(renderCitations(evt.citations));
-            }
-            if (currentMessageId) {
-              body.appendChild(renderActions(currentMessageId));
-            }
-
-            // Refresh sidebar
-            loadConversations();
-          } else if (evt.type === 'error') {
-            cursorEl.remove();
-            contentEl.innerHTML = renderMarkdown(evt.message || 'エラーが発生しました。');
-          }
-        } catch (e) {
-          // skip malformed JSON
-        }
-      }
-    }
-  } catch (e) {
-    removeLoading();
-    addMsg('ai', '接続エラーが発生しました。');
-  }
-
-  isStreaming = false;
-  sendBtn.disabled = false;
-  inputEl.focus();
+  // Demo: simulate response
+  addMsg('ai', 'ご質問を受け付けました。実際の環境では SSE ストリーミングで回答が表示されます。');
 }
 
-// ── Delete conversation ──
-
-async function deleteSession(sid) {
-  if (!confirm('この会話を削除しますか？')) return;
-  try {
-    const res = await fetch(`/v1/conversations/${encodeURIComponent(sid)}`, { method: 'DELETE' });
-    if (!res.ok) { alert('削除に失敗しました'); return; }
-    if (sessionId === sid) newChat();
-    else loadConversations();
-  } catch (e) {
-    alert('削除に失敗しました');
-  }
-}
-
-// ── Sidebar toggle (mobile) ──
-const sidebarEl = document.getElementById('sidebar');
-const overlayEl = document.getElementById('sidebarOverlay');
-
-function toggleSidebar() {
-  sidebarEl.classList.toggle('open');
-  overlayEl.classList.toggle('open');
-}
-
-function closeSidebar() {
-  sidebarEl.classList.remove('open');
-  overlayEl.classList.remove('open');
-}
-
-// ── Init ──
-loadConversations();
 inputEl.focus();
 </script>
 </body>

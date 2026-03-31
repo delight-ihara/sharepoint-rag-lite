@@ -4,3 +4,4 @@ __pycache__/
 .venv/
 test_output.txt
 test_results.txt
+src/.delta_link

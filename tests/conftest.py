@@ -15,9 +15,10 @@ os.environ.setdefault("SP_DRIVE_ID", "dummy")
 import pytest
 from fastapi.testclient import TestClient
 
-from src.api import app
+from src.api import app, limiter
 
 
 @pytest.fixture
 def client():
+    limiter.reset()
     return TestClient(app)

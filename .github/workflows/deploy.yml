@@ -2,7 +2,7 @@ name: Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [master]
 
 env:
   ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
