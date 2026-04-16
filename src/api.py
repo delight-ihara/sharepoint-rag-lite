@@ -11,6 +11,7 @@ import time
 import uuid
 from pathlib import Path
 
+import psycopg2
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -100,6 +101,23 @@ class ErrorResponse(BaseModel):
 
 
 # ── グローバル例外ハンドラ ──
+
+@app.exception_handler(psycopg2.OperationalError)
+async def db_operational_handler(request: Request, exc: psycopg2.OperationalError):
+    """DB 接続不能（プール生成含む）を 503 で返し、監視・UI の切り分けをしやすくする"""
+    log.exception("Database unavailable (OperationalError)")
+    msg = str(exc).lower()
+    detail = "しばらくしてから再度お試しください。"
+    if "tenant" in msg and "not found" in msg:
+        detail = (
+            "PostgreSQL（Supabase）のテナントが見つかりません。"
+            "プロジェクトが削除・一時停止していないか、DATABASE_URL のホストとユーザー（postgres.<project_ref>）をダッシュボードの値と照合してください。"
+        )
+    return JSONResponse(
+        status_code=503,
+        content={"error": "データベースに接続できません。", "detail": detail},
+    )
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
