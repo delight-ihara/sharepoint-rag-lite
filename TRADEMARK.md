@@ -1,11 +1,11 @@
 # Trademark and Brand Policy
 
-This project source code is available under the MIT License.
-The MIT License applies to code and documentation in this repository.
+This project source code is available under a non-commercial license.
+The code license and trademark policy are separate controls.
 
 ## Names, Logos, and Branding
 
-The following are not licensed under MIT:
+The following are not licensed by the code license:
 
 - Project names, product names, and service names associated with this repository
 - Logos, icons, and visual brand assets
