@@ -58,31 +58,31 @@ sharepoint-rag-lite/
 ## アーキテクチャ
 
 ```mermaid
-graph TB
-    subgraph Client
+flowchart TB
+    subgraph Client["Client"]
         Browser["ブラウザ / チャット UI"]
     end
 
     subgraph Azure["Azure Cloud"]
-        EasyAuth["Entra ID SSO<br/>（EasyAuth）"]
-        CA["Container Apps<br/>FastAPI + Chat UI"]
-        KV["Key Vault<br/>シークレット管理"]
-        OAI["Azure OpenAI<br/>GPT-4o-mini<br/>text-embedding-3-small"]
-        AppInsights["Application Insights<br/>OpenTelemetry"]
+        EasyAuth["Entra ID SSO<br>（EasyAuth）"]
+        CA["Container Apps<br>FastAPI + Chat UI"]
+        KV["Key Vault<br>シークレット管理"]
+        OAI["Azure OpenAI<br>GPT-4o-mini<br>text-embedding-3-small"]
+        AppInsights["Application Insights<br>OpenTelemetry"]
     end
 
     subgraph External["外部サービス"]
-        SP["SharePoint Online<br/>276ファイル / ACL"]
-        Supabase[("Supabase<br/>PostgreSQL + pgvector<br/>3,388チャンク")]
+        SP["SharePoint Online<br>276ファイル / ACL"]
+        Supabase[(Supabase<br>PostgreSQL + pgvector<br>3,388チャンク)]
     end
 
     Browser -->|HTTPS| EasyAuth
-    EasyAuth -->|"x-ms-client-principal<br/>（認証済みユーザー情報）"| CA
+    EasyAuth -->|"x-ms-client-principal<br>（認証済みユーザー情報）"| CA
     CA -->|"クエリ + ACL フィルタ"| Supabase
     CA -->|"回答生成 / 埋め込み"| OAI
     CA -->|シークレット取得| KV
     CA -->|テレメトリ送信| AppInsights
-    SP -->|"Graph API<br/>差分同期"| CA
+    SP -->|"Graph API<br>差分同期"| CA
 
     style CA fill:#339af0,color:#fff
     style Supabase fill:#3ecf8e,color:#fff
