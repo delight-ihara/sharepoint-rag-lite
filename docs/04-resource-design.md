@@ -189,7 +189,7 @@
 | 要件定義書 | 前提条件・制約・コスト要件 |
 | アーキテクチャ設計書 | コンポーネント構成・DB 設計 |
 | セキュリティ設計書 | RBAC・シークレット詳細 |
-| 既存リソース設計書 | [`04-resource-design.md`](https://github.com/YuhtaIhara/sharepoint-rag-azure/blob/main/docs/04-resource-design.md) |
+| 既存リソース設計書 | [`04-resource-design.md`](https://github.com/delight-ihara/sharepoint-rag-azure/blob/main/docs/04-resource-design.md) |
 
 ---
 

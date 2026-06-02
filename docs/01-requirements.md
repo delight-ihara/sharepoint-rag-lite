@@ -33,7 +33,7 @@ SharePoint 上に経営資料・人事労務規程・営業関連文書を格納
 
 ### 1.2 既存構成との関係
 
-本構成は既存の [sharepoint-rag-azure](https://github.com/YuhtaIhara/sharepoint-rag-azure)（Azure AI Search 構成）の**代替実装**であり、同一の SharePoint データソース・同一の ACL 要件を満たす。
+本構成は既存の [sharepoint-rag-azure](https://github.com/delight-ihara/sharepoint-rag-azure)（Azure AI Search 構成）の**代替実装**であり、同一の SharePoint データソース・同一の ACL 要件を満たす。
 
 | 項目 | 既存構成 | 本構成 |
 |------|----------|--------|
@@ -359,8 +359,8 @@ ACL はフォルダ単位で以下の4種類の権限エントリを処理する
 | テスト仕様書 | 既存 18ケース + 追加分 |
 | テスト結果報告書 | テスト後 |
 | 既存構成との比較報告 | 精度・コスト・ACL の比較 |
-| **既存要件定義書** | [`01-requirements.md`](https://github.com/YuhtaIhara/sharepoint-rag-azure/blob/main/docs/01-requirements.md) |
-| **既存テスト仕様書** | [`11-test-spec.md`](https://github.com/YuhtaIhara/sharepoint-rag-azure/blob/main/docs/11-test-spec.md)（ACL 18ケース） |
+| **既存要件定義書** | [`01-requirements.md`](https://github.com/delight-ihara/sharepoint-rag-azure/blob/main/docs/01-requirements.md) |
+| **既存テスト仕様書** | [`11-test-spec.md`](https://github.com/delight-ihara/sharepoint-rag-azure/blob/main/docs/11-test-spec.md)（ACL 18ケース） |
 
 ---
 

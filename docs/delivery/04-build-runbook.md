@@ -6,7 +6,7 @@
 
 ```bash
 # リポジトリ clone
-git clone https://github.com/YuhtaIhara/sharepoint-rag-lite.git
+git clone https://github.com/delight-ihara/sharepoint-rag-lite.git
 cd sharepoint-rag-lite
 pip install -r requirements.txt
 
