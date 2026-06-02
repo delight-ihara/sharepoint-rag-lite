@@ -3,7 +3,7 @@
 **SharePoint 文書を ACL 付きで検索できる RAG チャットボット**
 Azure AI Search を使わず、pgvector + FastAPI で構築。月額 ¥100〜600 で運用可能。
 
-> 既存の [sharepoint-rag-azure](https://github.com/YuhtaIhara/sharepoint-rag-azure)（Azure AI Search 構成 / 月額 ¥13,000+）の代替として設計・実装した軽量構成。
+> 既存の [sharepoint-rag-azure](https://github.com/delight-ihara/sharepoint-rag-azure)（Azure AI Search 構成 / 月額 ¥13,000+）の代替として設計・実装した軽量構成。
 
 <!-- デモ GIF を追加予定
 ![Demo](docs/assets/demo.gif)

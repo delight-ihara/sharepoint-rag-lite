@@ -900,7 +900,7 @@ main push → GitHub Actions:
 | 要件定義書 | 本書が実現する要件。劣後点一覧（§1.3） |
 | セキュリティ設計書 | 認証・認可・ACL 詳細（作成予定） |
 | テスト仕様書 | 既存 18ケース + 追加分（作成予定） |
-| 既存アーキテクチャ設計書 | [`02-architecture.md`](https://github.com/YuhtaIhara/sharepoint-rag-azure/blob/main/docs/02-architecture.md) |
+| 既存アーキテクチャ設計書 | [`02-architecture.md`](https://github.com/delight-ihara/sharepoint-rag-azure/blob/main/docs/02-architecture.md) |
 
 ---
 

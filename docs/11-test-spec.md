@@ -33,7 +33,7 @@
 | 2 | アーキテクチャ設計書（02-architecture.md） |
 | 3 | セキュリティ設計書（03-security.md） |
 | 4 | 構築ガイド（10-build-guide.md） |
-| 5 | 既存試験仕様書（[`11-test-spec.md`](https://github.com/YuhtaIhara/sharepoint-rag-azure/blob/main/docs/11-test-spec.md)） |
+| 5 | 既存試験仕様書（[`11-test-spec.md`](https://github.com/delight-ihara/sharepoint-rag-azure/blob/main/docs/11-test-spec.md)） |
 
 ---
 
