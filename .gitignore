@@ -5,3 +5,6 @@ __pycache__/
 test_output.txt
 test_results.txt
 src/.delta_link
+
+# 案件 PM / 顧客機密ノート (local-only、 絶対 push しない)
+_engagement/
